@@ -1605,7 +1605,7 @@ function exportToExcelWithOptions(startDate, endDate, workType, exportType, sele
 
     // 昇給日がない場合のみ列ヘッダーを追加
     if (!raiseDate) {
-      sheetData.push(["日付","出勤時間","退勤時間","合計時間","朝夕勤務","通常合計","勤務種別"]);
+      sheetData.push(["日付","出勤時間","退勤時間","合計時間","早朝勤務","夕方勤務","朝夕合計","通常合計","勤務種別"]);
     }
 
     // 昇給日対応：各期間ごとにデータを収集して出力
@@ -1664,10 +1664,12 @@ function exportToExcelWithOptions(startDate, endDate, workType, exportType, sele
         const endStr = `${periodEnd.getMonth() + 1}/${periodEnd.getDate()}`;
         sheetData.push([]);
         sheetData.push([`■ ${periodLabel} (${startStr}～${endStr})`]);
-        sheetData.push(["日付","出勤時間","退勤時間","合計時間","朝夕勤務","通常合計","勤務種別"]);
+        sheetData.push(["日付","出勤時間","退勤時間","合計時間","早朝勤務","夕方勤務","朝夕合計","通常合計","勤務種別"]);
       }
 
       let periodTotalDay = 0;
+      let periodEarlyMorning = 0;
+      let periodEvening = 0;
       let periodMorningEvening = 0;
       let periodNormal = 0;
 
@@ -1681,6 +1683,8 @@ function exportToExcelWithOptions(startDate, endDate, workType, exportType, sele
 
         if (rec.checkOut !== '未登録') {
           periodTotalDay += rec.totalHours;
+          periodEarlyMorning += rec.earlyMorning;
+          periodEvening += rec.evening;
           periodMorningEvening += morningEvening;
           periodNormal += normalHours;
         }
@@ -1690,6 +1694,8 @@ function exportToExcelWithOptions(startDate, endDate, workType, exportType, sele
           rec.checkIn,
           rec.checkOut,
           rec.checkOut === '未登録' ? '－' : rec.totalHours.toFixed(2),
+          rec.checkOut === '未登録' ? '－' : rec.earlyMorning.toFixed(2),
+          rec.checkOut === '未登録' ? '－' : rec.evening.toFixed(2),
           rec.checkOut === '未登録' ? '－' : morningEvening.toFixed(2),
           rec.checkOut === '未登録' ? '－' : normalHours.toFixed(2),
           rec.isPaidLeave ? "有給" : ""
@@ -1701,6 +1707,8 @@ function exportToExcelWithOptions(startDate, endDate, workType, exportType, sele
       sheetData.push([
         periodLabel ? `【${periodLabel}合計】` : "合計","","",
         periodTotalDay.toFixed(2),
+        periodEarlyMorning.toFixed(2),
+        periodEvening.toFixed(2),
         periodMorningEvening.toFixed(2),
         periodNormal.toFixed(2),
         ""
