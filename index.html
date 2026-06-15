@@ -3,150 +3,188 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>勤怠管理</title>
+  <title>勤怠管理（経理）5.0.0</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <!-- ダークモードトグル -->
-  <button class="theme-toggle" id="themeToggle">🌙</button>
 
-  <div class="logo">
-    <img src="logo.png" alt="勤怠管理ロゴ">
-  </div>
+  <!-- ヘッダー -->
+  <header class="app-header">
+    <div class="header-left">
+      <img src="logo.png" alt="ロゴ" class="header-logo">
+      <h1>勤怠管理 <span class="ver">経理用 5.0.0</span></h1>
+    </div>
+    <div class="header-right">
+      <!-- 通常／スイミング切替 -->
+      <div class="mode-switch" id="modeSwitch">
+        <button data-mode="normal" class="active">通常</button>
+        <button data-mode="swim">スイミング</button>
+      </div>
+      <button class="theme-toggle" id="themeToggle" title="ダークモード切替">🌙</button>
+    </div>
+  </header>
 
-  <!-- システム提供者の屋号 -->
-  <div class="company-name">
-    <span><span class="copyright">©</span> 2025 SwiftRaptor</span>
-  </div>
+  <main class="layout">
 
-  <div class="container">
-    <h1>勤怠管理</h1>
+    <!-- ============ 左カラム ============ -->
+    <div class="col-left">
 
-    <!-- フォーム開始 -->
-    <form id="timeCardForm">
+      <!-- 手入力・編集 -->
+      <section class="card">
+        <h2 class="card-title">✎ 手入力・編集</h2>
+        <form id="timeCardForm">
+          <div class="form-group">
+            <label for="name">名前</label>
+            <input type="text" id="name" list="nameList" required placeholder="従業員名を入力">
+            <datalist id="nameList"></datalist>
+          </div>
 
-      <div class="form-group">
-        <label for="name">名前</label>
-        <div class="input-wrapper">
-          <input type="text" id="name" required placeholder="従業員名を入力">
-          <button type="button" class="clear-btn" id="clearNameBtn">×</button>
-          <div class="dropdown-menu" id="nameDropdown"></div>
+          <div class="form-group" id="normalDateGroup">
+            <label for="dateSingle">月日</label>
+            <input type="date" id="dateSingle" required>
+          </div>
+
+          <div class="form-group hidden" id="paidLeaveYearGroup">
+            <label for="paidLeaveYear">有給用 西暦</label>
+            <input type="number" id="paidLeaveYear" min="2020" max="2100" step="1">
+          </div>
+
+          <div class="form-group hidden" id="multiDateGroup">
+            <label for="dateMulti">月日（カレンダーをクリックで複数選択）</label>
+            <input type="text" id="dateMulti" placeholder="例: 03-10, 03-11（手入力も可）">
+            <div id="paidCalendar" class="paid-calendar"></div>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group">
+              <label for="checkIn">出勤時間</label>
+              <input type="time" id="checkIn" required>
+            </div>
+            <div class="form-group">
+              <label for="checkOut">退勤時間</label>
+              <input type="time" id="checkOut" required>
+            </div>
+          </div>
+
+          <div class="form-row hidden" id="secondTimeGroup">
+            <div class="form-group">
+              <label for="checkIn2">出勤時間②（中抜けの人・任意）</label>
+              <input type="time" id="checkIn2">
+            </div>
+            <div class="form-group">
+              <label for="checkOut2">退勤時間②</label>
+              <input type="time" id="checkOut2">
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label class="checkbox-label">
+              <input type="checkbox" id="isPaidLeave">
+              有給として登録する
+            </label>
+          </div>
+
+          <div class="btn-stack">
+            <button type="submit" id="submitBtn" class="btn btn-primary btn-block">送信</button>
+            <button type="button" id="cancelEditBtn" class="btn btn-secondary btn-block hidden">編集キャンセル</button>
+          </div>
+        </form>
+      </section>
+
+      <!-- クラウド取込 -->
+      <section class="card" id="cloudCard">
+        <h2 class="card-title card-title-toggle" id="cloudCardToggle">☁ クラウドデータ <span class="collapse-arrow" id="cloudArrow">▾</span></h2>
+
+        <div id="cloudBody">
+
+        <!-- ログイン前 -->
+        <div id="cloudLogin">
+          <p class="hint">iPadから自動送信されたデータを取り込みます。</p>
+          <div class="form-group">
+            <label>メールアドレス</label>
+            <input type="email" id="cloudEmail" autocomplete="email">
+          </div>
+          <div class="form-group">
+            <label>パスワード</label>
+            <input type="password" id="cloudPassword" autocomplete="current-password">
+          </div>
+          <div id="cloudLoginError"></div>
+          <button class="btn btn-primary btn-block" id="cloudLoginBtn">ログイン</button>
         </div>
-      </div>
 
-      <div class="form-group" id="normalDateGroup">
-        <label for="dateSingle">月日</label>
-        <input type="date" id="dateSingle" required>
-      </div>
+        <!-- ログイン後 -->
+        <div id="cloudMain" class="hidden">
+          <div class="form-group">
+            <label>バックアップ（日ごとの保存ポイント）</label>
+            <select id="cloudSnapshotSel"></select>
+          </div>
+          <p class="hint" id="cloudSnapMeta"></p>
 
-      <div class="form-group hidden" id="paidLeaveYearGroup">
-        <label for="paidLeaveYear">有給用 西暦</label>
-        <input type="number" id="paidLeaveYear" min="2020" max="2100" step="1">
-      </div>
+          <div class="form-group">
+            <label>期間（10日締め）</label>
+            <select id="cloudPeriodSel"></select>
+          </div>
 
-      <div class="form-group hidden" id="multiDateGroup">
-        <label for="dateMulti">月日 (複数入力、カンマ区切り)</label>
-        <input type="text" id="dateMulti" placeholder="例: 03-10, 03-11">
-      </div>
+          <!-- 集計ミニビューワー -->
+          <div id="cloudSummary"></div>
 
-      <div class="form-group">
-        <label for="checkIn">出勤時間</label>
-        <input type="time" id="checkIn" required>
-      </div>
-      
-      <div class="form-group">
-        <label for="checkOut">退勤時間</label>
-        <input type="time" id="checkOut">
-      </div>
+          <div class="btn-stack">
+            <button class="btn btn-primary btn-block" id="cloudImportBtn">このデータをローカルへ取り込む</button>
+            <button class="btn btn-success btn-block" id="cloudRawSaveBtn">選択期間の元データを保存（月次）</button>
+          </div>
+          <p class="hint" id="rawSaveInfo"></p>
 
-      <!-- 有給チェック -->
-      <div class="form-group">
-        <label class="checkbox-label">
-          <input type="checkbox" id="isPaidLeave">
-          有給として登録する
-        </label>
-      </div>
-
-      <!-- フォーム内のボタン -->
-      <div class="btn-group main-buttons">
-        <button type="submit" id="submitBtn" class="btn-primary">送信</button>
-        <button type="button" id="cancelEditBtn" class="btn-secondary hidden">編集キャンセル</button>
-        <button type="button" id="exportBtn" class="btn-dark-success">Excelエクスポート</button>
-        <button type="button" id="clearDataBtn" class="btn-danger">データをクリア</button>
-      </div>
-
-    </form>
-    <!-- フォーム終了 -->
-
-    <!-- バックアップ・リストアのボタン -->
-    <div class="backup-restore-buttons">
-      <button type="button" id="backupBtn" class="btn-success">データをバックアップ</button>
-      <button type="button" id="backupLatestMonthBtn" class="btn-info">最新の月をバックアップ</button>
-      <input type="file" id="restoreFile" style="display: none;">
-      <button type="button" id="restoreBtn" class="btn-warning">データをリストア</button>
-    </div>
-
-    <!-- 検索 -->
-    <div class="form-group">
-      <label for="searchName">名前で検索</label>
-      <div class="input-wrapper">
-        <input type="text" id="searchName" placeholder="名前を入力して検索">
-        <button type="button" class="clear-btn" id="clearSearchBtn">×</button>
-        <div class="dropdown-menu" id="searchDropdown"></div>
-      </div>
-    </div>
-
-    <!-- タイムカード一覧表示 -->
-    <div id="result"></div>
-  </div>
-
-  <!-- エクスポートダイアログ -->
-  <div id="exportDialog" class="ios-dialog" style="display: none;">
-    <div class="ios-dialog-content export-dialog-content">
-      <div class="ios-dialog-header">
-        <div class="ios-dialog-title">Excelエクスポート</div>
-      </div>
-      <div class="export-dialog-body">
-        <!-- 名前フィルター -->
-        <div class="form-group">
-          <label for="exportName">名前フィルター</label>
-          <div class="input-wrapper">
-            <input type="text" id="exportName" class="export-input" placeholder="すべての従業員">
-            <button type="button" class="clear-btn" id="clearExportBtn">×</button>
-            <div class="dropdown-menu" id="exportDropdown"></div>
+          <div class="cloud-footer">
+            <a href="https://supabase.com/dashboard/project/fdvibgxcuviftanwrjnn/editor/17515" target="_blank">🛠 Supabase管理画面</a>
+            <button class="btn-link" id="cloudReloadBtn">再読込</button>
+            <button class="btn-link" id="cloudLogoutBtn">ログアウト</button>
           </div>
         </div>
 
-        <div class="form-group">
-          <label for="exportType">エクスポート種類</label>
-          <select id="exportType" class="export-select">
-            <option value="all">全データ</option>
-            <option value="latest">最新の月</option>
-            <option value="custom">期間指定</option>
-          </select>
-        </div>
-        
-        <div class="form-group hidden" id="customDateGroup">
-          <label for="exportStartDate">開始日</label>
-          <input type="date" id="exportStartDate" class="export-input">
-          <label for="exportEndDate" style="margin-top: 12px;">終了日</label>
-          <input type="date" id="exportEndDate" class="export-input">
-        </div>
+        </div><!-- /cloudBody -->
+      </section>
 
-<div class="form-group">
-  <label for="exportWorkType">業務内容</label>
-  <select id="exportWorkType" class="export-select">
-    <option value="通常" selected>通常</option>
-    <option value="スイミング">スイミング</option>
-  </select>
-</div>>
-      </div>
-      <div class="ios-dialog-buttons">
-        <button class="ios-dialog-button" id="exportCancelBtn">キャンセル</button>
-        <button class="ios-dialog-button primary" id="exportConfirmBtn">エクスポート</button>
-      </div>
     </div>
-  </div>
+
+    <!-- ============ 右カラム ============ -->
+    <div class="col-right">
+
+      <!-- ツールバー -->
+      <section class="card toolbar">
+        <div class="form-group search-group">
+          <label for="searchName">名前で検索</label>
+          <div class="search-wrap">
+            <input type="text" id="searchName" list="nameList" placeholder="名前を入力して絞り込み">
+            <button type="button" id="searchClearBtn" class="search-clear" title="検索をクリア">✕</button>
+          </div>
+        </div>
+        <div class="toolbar-buttons">
+          <button class="btn btn-sheet" id="fixSheetBtn" title="修正申請スプレッドシートを横に並べて開く">📋 修正申請</button>
+          <button class="btn btn-drive" id="driveBtn" title="Excel・JSONの保存先フォルダを横に並べて開く">📁 ドライブ</button>
+          <button class="btn btn-excel" id="exportBtn">📊 Excelエクスポート</button>
+          <button class="btn btn-success" id="backupBtn">バックアップ</button>
+          <button class="btn btn-warning" id="restoreBtn">リストア</button>
+          <input type="file" id="restoreFile" accept=".json" style="display:none;">
+          <button class="btn btn-danger" id="clearDataBtn">全データ削除</button>
+        </div>
+      </section>
+
+      <!-- 一覧 -->
+      <section class="card">
+        <h2 class="card-title" id="listTitle">勤怠一覧</h2>
+        <div id="bulkBar" class="bulk-bar hidden">
+          <span id="bulkCount"></span>
+          <button class="btn btn-warning" id="bulkEditBtn">時間をまとめて変更</button>
+          <button class="btn btn-danger" id="bulkDeleteBtn">まとめて削除</button>
+          <button class="btn-link" id="bulkClearBtn">選択解除</button>
+        </div>
+        <div id="result"></div>
+      </section>
+
+    </div>
+  </main>
+
+  <div class="footer"><span>©</span> 2026 SwiftRaptor</div>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.17.0/xlsx.full.min.js"></script>
   <script src="script.js"></script>
