@@ -636,27 +636,29 @@ input:focus, select:focus { border-color: var(--accent); }
 }
 .rank-legend b { color: var(--accent); }
 
-/* A〜E の時給入力 */
-.wage-inputs { display: flex; flex-wrap: wrap; gap: 10px; }
-.wage-field {
-  display: flex;
+/* A〜E の時給入力（グローバルの label/input 指定に負けないよう詳細度を上げる） */
+.wage-inputs { display: flex; flex-wrap: wrap; gap: 10px 14px; }
+.wage-inputs .wage-field {
+  display: inline-flex;
   align-items: center;
   gap: 4px;
-  margin-bottom: 0;
+  margin: 0;
   font-size: 13px;
+  font-weight: 400;
   color: var(--text-secondary);
 }
-.wage-rank {
+.wage-inputs .wage-field .wage-rank {
   font-weight: 600;
   color: var(--accent);
   width: 16px;
   text-align: center;
 }
-.wage-field input {
-  width: 70px;
-  padding: 4px 6px;
+.wage-inputs .wage-field input[type="number"] {
+  width: 76px;
+  padding: 5px 8px;
+  font-size: 13px;
   border: 1px solid var(--border);
-  border-radius: 5px;
+  border-radius: 6px;
   text-align: right;
 }
 
