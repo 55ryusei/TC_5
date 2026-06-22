@@ -603,6 +603,63 @@ input:focus, select:focus { border-color: var(--accent); }
 
 .user-row label { margin-bottom: 0; flex: 1; }
 
+/* 従業員ごとの資格・バス添乗トグル（合計まとめのA〜E振り分け用） */
+.emp-attrs { display: flex; gap: 8px; flex: 0 0 auto; }
+.emp-attrs label {
+  flex: 0 0 auto;
+  margin-bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.emp-attrs input { margin: 0; }
+
+/* A〜E 振り分けの凡例 */
+.rank-legend {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-subtle);
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+.rank-legend-title {
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+}
+.rank-legend b { color: var(--accent); }
+
+/* A〜E の時給入力 */
+.wage-inputs { display: flex; flex-wrap: wrap; gap: 10px; }
+.wage-field {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.wage-rank {
+  font-weight: 600;
+  color: var(--accent);
+  width: 16px;
+  text-align: center;
+}
+.wage-field input {
+  width: 70px;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  text-align: right;
+}
+
 .order-btns { display: flex; gap: 2px; }
 
 .order-btn {
