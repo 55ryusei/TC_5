@@ -989,6 +989,66 @@ function saveExportOrder(names) {
   localStorage.setItem(ORDER_KEY, JSON.stringify(names));
 }
 
+// 従業員ごとの属性（資格有無・バス添乗）。通常／スイミング共通で名前をキーに保存。
+// 合計まとめシートの日給ランク（A〜E）振り分けに使う。
+const EMP_ATTR_KEY = 'employeeAttrs';
+
+// 初期値（資格＝「あり」、バス添乗＝「バス朝」。未保存の人はここの値が使われる）
+const DEFAULT_EMP_ATTRS = {
+  '穂積':   { qualified: true },
+  '外崎':   { qualified: true },
+  '新井郁絵': { bus: true },
+  '延谷':   { qualified: true },
+  'あやこ': { bus: true },
+  '潮':     { qualified: true },
+  '市川弘美': { qualified: true },
+  '古巣麻衣': { qualified: true },
+  '岡本':   { qualified: true },
+  '萩原':   { qualified: true }
+};
+
+function loadEmployeeAttrs() {
+  try {
+    const o = JSON.parse(localStorage.getItem(EMP_ATTR_KEY) || '{}');
+    return (o && typeof o === 'object' && !Array.isArray(o)) ? o : {};
+  } catch { return {}; }
+}
+
+function getEmployeeAttr(name) {
+  // 保存済みが最優先。未保存ならデフォルト（画像の初期値）。
+  const saved = loadEmployeeAttrs();
+  const a = saved[name] || DEFAULT_EMP_ATTRS[name] || {};
+  return { qualified: !!a.qualified, bus: !!a.bus };
+}
+
+function setEmployeeAttr(name, attr) {
+  const all = loadEmployeeAttrs();
+  all[name] = { qualified: !!attr.qualified, bus: !!attr.bus };
+  localStorage.setItem(EMP_ATTR_KEY, JSON.stringify(all));
+}
+
+// 日給ランク A〜E の時給（円）。設定で変更可、未設定は初期値。
+const WAGE_KEY = 'rankWages';
+const DEFAULT_WAGES = { A: 1300, B: 1200, C: 1500, D: 1400, E: 1500 };
+
+function loadWages() {
+  let saved = {};
+  try {
+    const o = JSON.parse(localStorage.getItem(WAGE_KEY) || '{}');
+    if (o && typeof o === 'object' && !Array.isArray(o)) saved = o;
+  } catch {}
+  const w = {};
+  for (const k of ['A', 'B', 'C', 'D', 'E']) {
+    const v = Number(saved[k]);
+    w[k] = Number.isFinite(v) && v > 0 ? v : DEFAULT_WAGES[k];
+  }
+  return w;
+}
+
+function saveWages(wages) {
+  localStorage.setItem(WAGE_KEY, JSON.stringify(wages));
+}
+
 function orderedUserNames(names) {
   const saved = loadExportOrder();
   const known = saved.filter(n => names.includes(n));
@@ -1032,6 +1092,18 @@ function showExportDialog() {
         <div class="form-group">
           <label>エクスポートする従業員（ドラッグまたは▲▼で並び順を変更・自動保存、上から順にシートになります）</label>
           <div class="user-checkbox-list" id="userOrderList"></div>
+          <div class="rank-legend">
+            <div class="rank-legend-title">合計まとめ A〜E 振り分け</div>
+            <div><b>A</b> = 資格有 × 通常</div>
+            <div><b>B</b> = 資格なし × 通常</div>
+            <div><b>C</b> = 資格有 × 朝 ／ 資格有 × 夕 ／ 資格なし × 朝（バス添乗なし）</div>
+            <div><b>D</b> = 資格なし × 朝（バス添乗あり） ／ 資格なし × 夕</div>
+            <div><b>E</b> = スイミング（時間帯・資格問わず全時間）</div>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>A〜E の時給（円・変更すると自動保存。Excelのヘッダーに表示されます）</label>
+          <div class="wage-inputs" id="wageInputs"></div>
         </div>
         <div class="form-group">
           <label>エクスポート期間</label>
@@ -1064,18 +1136,39 @@ function showExportDialog() {
 
   const closeDialog = () => { dialog.style.opacity = '0'; setTimeout(() => dialog.remove(), 250); };
 
+  // A〜E の時給入力（変更で自動保存）
+  const wageBox = dialog.querySelector('#wageInputs');
+  const wages = loadWages();
+  wageBox.innerHTML = ['A', 'B', 'C', 'D', 'E'].map(k => `
+    <label class="wage-field"><span class="wage-rank">${k}</span>
+      <input type="number" class="wageInput" data-rank="${k}" min="0" step="10" value="${wages[k]}">円</label>`).join('');
+  wageBox.addEventListener('change', e => {
+    if (!e.target.classList.contains('wageInput')) return;
+    const cur = loadWages();
+    const v = Number(e.target.value);
+    if (Number.isFinite(v) && v > 0) cur[e.target.dataset.rank] = Math.round(v);
+    saveWages(cur);
+  });
+
   const orderList = dialog.querySelector('#userOrderList');
 
   // 従業員リストの描画（出力対象の切り替えで作り直す）
-  const userRowHtml = n => `
+  const userRowHtml = n => {
+    const a = getEmployeeAttr(n);
+    return `
     <div class="user-row" data-name="${esc(n)}" draggable="true">
       <span class="drag-handle" title="ドラッグで並べ替え">⠿</span>
       <label><input type="checkbox" class="userCheckbox" value="${esc(n)}" checked> ${esc(n)}</label>
+      <span class="emp-attrs" title="合計まとめのA〜E振り分けに使用">
+        <label title="資格有"><input type="checkbox" class="attrQualified" ${a.qualified ? 'checked' : ''}> 資格</label>
+        <label title="バス添乗"><input type="checkbox" class="attrBus" ${a.bus ? 'checked' : ''}> バス</label>
+      </span>
       <span class="order-btns">
         <button type="button" class="order-btn" data-dir="up" title="上へ">▲</button>
         <button type="button" class="order-btn" data-dir="down" title="下へ">▼</button>
       </span>
     </div>`;
+  };
 
   const renderUserList = scope => {
     orderList.innerHTML =
@@ -1090,6 +1183,15 @@ function showExportDialog() {
 
   // 全選択チェックボックス（リストを作り直しても効くように委譲で処理）
   orderList.addEventListener('change', e => {
+    // 資格・バス添乗の変更は即保存
+    if (e.target.classList.contains('attrQualified') || e.target.classList.contains('attrBus')) {
+      const row = e.target.closest('.user-row');
+      setEmployeeAttr(row.dataset.name, {
+        qualified: row.querySelector('.attrQualified').checked,
+        bus: row.querySelector('.attrBus').checked
+      });
+      return;
+    }
     const selectAll = orderList.querySelector('#selectAllUsers');
     const boxes = [...orderList.querySelectorAll('.userCheckbox')];
     if (e.target === selectAll) {
@@ -1253,6 +1355,14 @@ function exportToExcel(startDate, endDate, exportType, selectedUsers, raiseDate,
     for (const m of targets) tasks.push({ name, mode: m, dual });
   }
 
+  // 最後のまとめシート用：各人の全期間合計を日給ランク A〜E に振り分けて集める
+  //   A=資格有×通常 / B=資格なし×通常
+  //   C=資格有×朝 + 資格有×夕 + 資格なし×朝（バス無）
+  //   D=資格なし×朝（バス有）+ 資格なし×夕 / E=スイミング（全時間）
+  // 通常とスイミング両方ある人は1行にまとめる（A〜Dは通常、Eはスイミング由来）
+  const summaryByName = {};
+  const summaryOrder = [];
+
   for (const { name, mode, dual } of tasks) {
     const cards = dataByMode[mode][name] || {};
     const workType = MODES[mode].label;
@@ -1274,6 +1384,8 @@ function exportToExcel(startDate, endDate, exportType, selectedUsers, raiseDate,
     }
 
     let hasAnyData = false;
+    // この人（×モード）の全期間を通した合計
+    let gTotal = 0, gEarly = 0, gEvening = 0, gNormal = 0;
 
     for (const { start: pStart, end: pEnd, label: pLabel } of periods) {
       const periodData = [];
@@ -1347,6 +1459,31 @@ function exportToExcel(startDate, endDate, exportType, selectedUsers, raiseDate,
         sumTotal.toFixed(2), sumEarly.toFixed(2), sumEvening.toFixed(2),
         sumME.toFixed(2), sumNormal.toFixed(2), ""
       ]);
+
+      gTotal += sumTotal; gEarly += sumEarly; gEvening += sumEvening;
+      gNormal += sumNormal;
+    }
+
+    if (hasAnyData) {
+      let row = summaryByName[name];
+      if (!row) { row = summaryByName[name] = { name, a: 0, b: 0, c: 0, d: 0, e: 0 }; summaryOrder.push(name); }
+      if (mode === 'swim') {
+        row.e += gTotal;                       // スイミングは全時間 → E
+      } else {
+        const attr = getEmployeeAttr(name);
+        if (attr.qualified) {
+          row.a += gNormal;                    // 資格有×通常 → A
+          row.c += gEarly + gEvening;          // 資格有×朝夕 → C
+        } else {
+          row.b += gNormal;                    // 資格なし×通常 → B
+          if (attr.bus) {
+            row.d += gEarly + gEvening;         // 資格なし×朝(バス) + 夕 → D
+          } else {
+            row.c += gEarly;                    // 資格なし×朝(バス無) → C
+            row.d += gEvening;                  // 資格なし×夕 → D
+          }
+        }
+      }
     }
 
     if (!hasAnyData) {
@@ -1364,6 +1501,68 @@ function exportToExcel(startDate, endDate, exportType, selectedUsers, raiseDate,
   if (sheetCount === 0) {
     showToast('選択した期間にデータがありません', 'warning');
     return;
+  }
+
+  // 最後のシート：各人の合計時間を日給ランク A〜E に振り分けてまとめる
+  if (summaryOrder.length > 0) {
+    const wages = loadWages();
+    const summaryData = [];
+    summaryData.push(["合計時間まとめ（単位：時間）"]);
+    summaryData.push([]);
+    summaryData.push([
+      "名前",
+      `A ${wages.A}円`,
+      `B ${wages.B}円`,
+      `C ${wages.C}円`,
+      `D ${wages.D}円`,
+      `E ${wages.E}円`
+    ]);
+
+    summaryOrder.forEach(n => {
+      const r = summaryByName[n];
+      summaryData.push([
+        r.name,
+        r.a.toFixed(2),
+        r.b.toFixed(2),
+        r.c.toFixed(2),
+        r.d.toFixed(2),
+        r.e.toFixed(2)
+      ]);
+    });
+
+    // A〜E 振り分け表（凡例）。各行は6列ぶん結合して見やすく表示
+    summaryData.push([]);
+    const legendStart = summaryData.length;
+    const legendLines = [
+      "【A〜E 振り分け】",
+      "A = 資格有 × 通常",
+      "B = 資格なし × 通常",
+      "C = 資格有 × 朝 ／ 資格有 × 夕 ／ 資格なし × 朝（バス添乗なし）",
+      "D = 資格なし × 朝（バス添乗あり） ／ 資格なし × 夕",
+      "E = スイミング（時間帯・資格問わず全時間）"
+    ];
+    legendLines.forEach(line => summaryData.push([line]));
+
+    const summarySheet = XLSX.utils.aoa_to_sheet(summaryData);
+    // 列幅（名前は広め、数値列もゆったり）
+    summarySheet['!cols'] = [
+      { wch: 24 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 12 }
+    ];
+    // 全行に高さを設定して詰まりを解消（タイトル＝大、区切り＝小、その他＝ゆったり）
+    summarySheet['!rows'] = summaryData.map((row, i) => {
+      if (i === 0) return { hpt: 30 };                 // タイトル
+      if (row.length === 0) return { hpt: 10 };        // 区切りの空行
+      return { hpt: 24 };                              // 見出し・データ・凡例
+    });
+    // タイトル＋凡例の各行を6列ぶん結合
+    summarySheet['!merges'] = [
+      { s: { r: 0, c: 0 }, e: { r: 0, c: 5 } }
+    ];
+    legendLines.forEach((_, i) => {
+      const r = legendStart + i;
+      summarySheet['!merges'].push({ s: { r, c: 0 }, e: { r, c: 5 } });
+    });
+    XLSX.utils.book_append_sheet(workbook, summarySheet, "合計まとめ");
   }
 
   // ファイル名: R{令和}.{開始月}-{終了月}（スイミングは_SW付き）
