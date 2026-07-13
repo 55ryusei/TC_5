@@ -1494,6 +1494,18 @@ function exportToExcel(startDate, endDate, exportType, selectedUsers, raiseDate,
       }
     }
     const worksheet = XLSX.utils.aoa_to_sheet(sheetData);
+    // 列幅：ヘッダー（出勤時間・退勤時間 等の4文字）が切れず全部見えるように広めに確保
+    worksheet['!cols'] = [
+      { wch: 12 }, // 日付
+      { wch: 11 }, // 出勤時間
+      { wch: 11 }, // 退勤時間
+      { wch: 11 }, // 合計時間
+      { wch: 11 }, // 早朝勤務
+      { wch: 11 }, // 夕方勤務
+      { wch: 11 }, // 朝夕合計
+      { wch: 11 }, // 通常合計
+      { wch: 11 }  // 勤務種別
+    ];
     XLSX.utils.book_append_sheet(workbook, worksheet, sheetName.slice(0, 31));
     sheetCount++;
   }
