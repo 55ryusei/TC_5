@@ -961,17 +961,25 @@ function calculateEveningTime(startTime, endTime) {
   return 0;
 }
 
-// 基本の並び順（通常・スイミング共通の印刷順）。
-// ツール上で並べ替えていないとき（初回や別PCで開いたとき）はこの順番が使われる。
-// 順番を恒久的に変えたいときはここを書き換える。
-const DEFAULT_EXPORT_ORDER = [
-  '穂積', 'かおり', '外崎', 'るな', '新井郁絵', '延谷', '森田', '並',
-  '佐藤雅恵', 'あやこ', '梅原瑞穂', '清水隆晟', '潮', '市川弘美',
-  '古巣麻衣', '山内ちぐさ', '加藤厚子', '吉岡陽子', '岡本', '萩原'
-];
+// 並び順（通常・スイミング共通の印刷順）は、画面で並べ替えたものを端末に保存して使う。
+// このツールは公開リポジトリ（GitHub Pages）で配っているので、職員の氏名はソースに書かない。
+// 初期値は空（未設定の端末では五十音順）。別の端末へは、エクスポート画面の
+// 「設定を書き出す／読み込む」で並び順・資格／バス・手書き用の人をまとめて持っていく。
 
-// データが無くてもシートを出力する人（Excelに手書きで記入する人）
-const ALWAYS_EXPORT_EMPTY = ['清水隆晟'];
+// データが無くてもシートを出力する人（Excelに手書きで記入する人）。
+// これも氏名はソースに書かず、エクスポート画面で入力して端末に保存する。
+const ALWAYS_EMPTY_KEY = 'alwaysExportEmpty';
+
+function loadAlwaysExportEmpty() {
+  try {
+    const arr = JSON.parse(localStorage.getItem(ALWAYS_EMPTY_KEY) || '[]');
+    return Array.isArray(arr) ? arr.map(n => String(n).trim()).filter(Boolean) : [];
+  } catch { return []; }
+}
+
+function saveAlwaysExportEmpty(names) {
+  localStorage.setItem(ALWAYS_EMPTY_KEY, JSON.stringify(names));
+}
 
 // 並び順の保存先（通常・スイミング共通の1本）
 const ORDER_KEY = 'exportOrderUnified';
@@ -982,7 +990,7 @@ function loadExportOrder() {
     const arr = JSON.parse(localStorage.getItem(ORDER_KEY) || '[]');
     if (Array.isArray(arr) && arr.length > 0) return arr;
   } catch {}
-  return DEFAULT_EXPORT_ORDER;
+  return [];
 }
 
 function saveExportOrder(names) {
@@ -993,19 +1001,8 @@ function saveExportOrder(names) {
 // 合計まとめシートの日給ランク（A〜E）振り分けに使う。
 const EMP_ATTR_KEY = 'employeeAttrs';
 
-// 初期値（資格＝「あり」、バス添乗＝「バス朝」。未保存の人はここの値が使われる）
-const DEFAULT_EMP_ATTRS = {
-  '穂積':   { qualified: true },
-  '外崎':   { qualified: true },
-  '新井郁絵': { bus: true },
-  '延谷':   { qualified: true },
-  'あやこ': { bus: true },
-  '潮':     { qualified: true },
-  '市川弘美': { qualified: true },
-  '古巣麻衣': { qualified: true },
-  '岡本':   { qualified: true },
-  '萩原':   { qualified: true }
-};
+// 初期値はソースに持たない（氏名を公開リポジトリに置かないため）。
+// 未保存の人は「資格なし・バス添乗なし」扱い。エクスポート画面のチェックで保存する。
 
 function loadEmployeeAttrs() {
   try {
@@ -1015,9 +1012,8 @@ function loadEmployeeAttrs() {
 }
 
 function getEmployeeAttr(name) {
-  // 保存済みが最優先。未保存ならデフォルト（画像の初期値）。
   const saved = loadEmployeeAttrs();
-  const a = saved[name] || DEFAULT_EMP_ATTRS[name] || {};
+  const a = saved[name] || {};
   return { qualified: !!a.qualified, bus: !!a.bus };
 }
 
@@ -1025,6 +1021,59 @@ function setEmployeeAttr(name, attr) {
   const all = loadEmployeeAttrs();
   all[name] = { qualified: !!attr.qualified, bus: !!attr.bus };
   localStorage.setItem(EMP_ATTR_KEY, JSON.stringify(all));
+}
+
+/* 従業員設定（並び順・資格／バス・手書き用の人）の書き出しと読み込み。
+   氏名はソースに置かないので、別の端末へはこのJSONファイルで持っていく。
+   勤怠データのバックアップ（{名前:{日付:[…]}}）とは別物。 */
+const SETTINGS_FILE_TYPE = 'tc5-employee-settings';
+
+function exportEmployeeSettings() {
+  const data = {
+    type: SETTINGS_FILE_TYPE,
+    exportOrder: loadExportOrder(),
+    employeeAttrs: loadEmployeeAttrs(),
+    alwaysExportEmpty: loadAlwaysExportEmpty()
+  };
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `従業員設定_${toDateStr(new Date()).replace(/-/g, '')}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+  showToast('従業員設定を書き出しました', 'success');
+}
+
+function importEmployeeSettings(file, done) {
+  const reader = new FileReader();
+  reader.onload = function (event) {
+    try {
+      const d = JSON.parse(event.target.result);
+      if (!d || d.type !== SETTINGS_FILE_TYPE) {
+        showToast('従業員設定のファイルではありません', 'error');
+        return;
+      }
+      if (Array.isArray(d.exportOrder)) {
+        saveExportOrder(d.exportOrder.map(n => String(n).trim()).filter(Boolean));
+      }
+      if (d.employeeAttrs && typeof d.employeeAttrs === 'object' && !Array.isArray(d.employeeAttrs)) {
+        const attrs = {};
+        for (const [n, a] of Object.entries(d.employeeAttrs)) {
+          attrs[String(n)] = { qualified: !!(a && a.qualified), bus: !!(a && a.bus) };
+        }
+        localStorage.setItem(EMP_ATTR_KEY, JSON.stringify(attrs));
+      }
+      if (Array.isArray(d.alwaysExportEmpty)) {
+        saveAlwaysExportEmpty(d.alwaysExportEmpty.map(n => String(n).trim()).filter(Boolean));
+      }
+      showToast('従業員設定を読み込みました', 'success');
+      if (done) done();
+    } catch {
+      showToast('従業員設定の読み込み中にエラーが発生しました', 'error');
+    }
+  };
+  reader.readAsText(file);
 }
 
 // 日給ランク A〜E の時給（円）。設定で変更可、未設定は初期値。
@@ -1062,7 +1111,7 @@ function exportCandidateNames(scope) {
   const names = new Set();
   modes.forEach(m => Object.keys(loadDataFor(m)).forEach(n => names.add(n)));
   // データが無くても出力する人（手書き用）は常にリストに載せる
-  if (modes.includes('normal')) ALWAYS_EXPORT_EMPTY.forEach(n => names.add(n));
+  if (modes.includes('normal')) loadAlwaysExportEmpty().forEach(n => names.add(n));
   return orderedUserNames([...names]);
 }
 
@@ -1099,6 +1148,18 @@ function showExportDialog() {
             <div><b>C</b> = 資格有 × 朝 ／ 資格有 × 夕 ／ 資格なし × 朝（バス添乗なし）</div>
             <div><b>D</b> = 資格なし × 朝（バス添乗あり） ／ 資格なし × 夕</div>
             <div><b>E</b> = スイミング（時間帯・資格問わず全時間）</div>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>データが無くてもシートを出力する人（手書き用・カンマ区切り・自動保存）</label>
+          <input type="text" id="alwaysEmptyInput" placeholder="例: 山田, 佐藤" value="${esc(loadAlwaysExportEmpty().join(', '))}">
+        </div>
+        <div class="form-group">
+          <label>並び順・資格／バス・手書き用の設定はこの端末に保存されています。別の端末へ移すときに使います</label>
+          <div style="display:flex; gap:8px;">
+            <button type="button" class="btn btn-secondary" id="exportSettingsBtn">設定を書き出す</button>
+            <button type="button" class="btn btn-secondary" id="importSettingsBtn">設定を読み込む</button>
+            <input type="file" id="importSettingsFile" accept=".json" style="display:none;">
           </div>
         </div>
         <div class="form-group">
@@ -1179,6 +1240,26 @@ function showExportDialog() {
 
   dialog.querySelector('#exportScope').addEventListener('change', function () {
     renderUserList(this.value);
+  });
+
+  // 手書き用の人（カンマ区切り）。変えたら保存して従業員リストを作り直す
+  dialog.querySelector('#alwaysEmptyInput').addEventListener('change', function () {
+    saveAlwaysExportEmpty(this.value.split(/[,、，]/).map(s => s.trim()).filter(Boolean));
+    this.value = loadAlwaysExportEmpty().join(', ');
+    renderUserList(dialog.querySelector('#exportScope').value);
+  });
+
+  // 従業員設定の書き出し・読み込み（別の端末へ持っていくため）
+  dialog.querySelector('#exportSettingsBtn').addEventListener('click', exportEmployeeSettings);
+  dialog.querySelector('#importSettingsBtn').addEventListener('click', () => dialog.querySelector('#importSettingsFile').click());
+  dialog.querySelector('#importSettingsFile').addEventListener('change', function () {
+    const file = this.files && this.files[0];
+    this.value = '';
+    if (!file) return;
+    importEmployeeSettings(file, () => {
+      dialog.querySelector('#alwaysEmptyInput').value = loadAlwaysExportEmpty().join(', ');
+      renderUserList(dialog.querySelector('#exportScope').value);
+    });
   });
 
   // 全選択チェックボックス（リストを作り直しても効くように委譲で処理）
@@ -1346,11 +1427,12 @@ function exportToExcel(startDate, endDate, exportType, selectedUsers, raiseDate,
 
   // 出力シート（1人×1モード＝1シート）をダイアログの表示順に組み立てる。
   // 両モードにデータがある人は 通常→スイミング の順で並べ、シート名に（通常）（スイミング）を付ける
+  const alwaysEmpty = loadAlwaysExportEmpty();
   const tasks = [];
   for (const name of selectedUsers) {
     const targets = modesToExport.filter(m =>
       (dataByMode[m][name] && Object.keys(dataByMode[m][name]).length > 0) ||
-      (m === 'normal' && ALWAYS_EXPORT_EMPTY.includes(name)));
+      (m === 'normal' && alwaysEmpty.includes(name)));
     const dual = targets.length > 1;
     for (const m of targets) tasks.push({ name, mode: m, dual });
   }
@@ -1367,7 +1449,7 @@ function exportToExcel(startDate, endDate, exportType, selectedUsers, raiseDate,
     const cards = dataByMode[mode][name] || {};
     const workType = MODES[mode].label;
     // データが無くてもシートを出す人（手書き用）
-    const forceEmpty = mode === 'normal' && ALWAYS_EXPORT_EMPTY.includes(name);
+    const forceEmpty = mode === 'normal' && alwaysEmpty.includes(name);
 
     let sheetName = name;
     if (dual) {
