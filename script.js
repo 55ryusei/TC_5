@@ -1764,49 +1764,8 @@ function exportToExcel(startDate, endDate, exportType, selectedUsers, raiseDate,
   else if (getMode() === 'swim') filename += '_SW';
   filename += '.xlsx';
 
-  writeWorkbookFile(workbook, filename);
+  XLSX.writeFile(workbook, filename);
   showToast('Excelファイルを出力しました', 'success');
-}
-
-/*
- *  Excelファイルを書き出す。基準フォントを「ＭＳ Ｐゴシック」にしてから保存する。
- *
- *  SheetJS（無償版）は基準フォントを Calibri で書き出す。日本語版Excelで開くぶんには
- *  ＭＳ Ｐゴシックに読み替えて表示されるので違いは出ないが、Googleスプレッドシートは
- *  書いてあるフォントのまま列幅を計算するため、Excelで一度保存し直したファイル
- *  （＝ＭＳ Ｐゴシックが書かれる）と列幅が変わってしまう。
- *  最初からＭＳ Ｐゴシックで書いておけば、保存し直したかどうかに関係なく同じ幅になる。
- *
- *  無償版は書式を指定できないので、出来上がったファイルの中の styles.xml を直接書き換える。
- *  セルには書式を付けていないので、書き換えるのは基準フォント1か所だけでよい。
- *  うまくいかなかったときは、今までどおりそのまま保存する。
- */
-function writeWorkbookFile(workbook, filename) {
-  try {
-    const data = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
-    const zip = XLSX.CFB.read(new Uint8Array(data), { type: 'array' });
-    const styles = XLSX.CFB.find(zip, '/xl/styles.xml');
-    if (!styles) throw new Error('styles.xml が見つからない');
-    const xml = new TextDecoder('utf-8').decode(styles.content);
-    // 基準フォント（最初の font）だけを書き換える。scheme="minor" はテーマのフォントを
-    // 使えという意味で名前より優先されてしまうので外す
-    const fixed = xml.replace(/(<fonts[^>]*>\s*<font>)([\s\S]*?)(<\/font>)/, (all, head, body, tail) =>
-      head + body.replace(/<name val="[^"]*"\/>/, '<name val="ＭＳ Ｐゴシック"/>')
-                 .replace(/<scheme val="minor"\/>/, '') + tail);
-    if (fixed === xml) throw new Error('基準フォントの書き換え先が見つからない');
-    styles.content = new TextEncoder().encode(fixed);
-    styles.size = styles.content.length;
-    const out = XLSX.CFB.write(zip, { fileType: 'zip', type: 'array' });
-    const blob = new Blob([out], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = filename;
-    document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-  } catch (e) {
-    console.warn('フォントを差し替えずに保存します:', e);
-    XLSX.writeFile(workbook, filename);
-  }
 }
 
 /* ============ 11. バックアップ・リストア ============ */
