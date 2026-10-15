@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>勤怠管理（経理）5.0.0</title>
-  <link rel="stylesheet" href="styles.css?v=5.0.1">
+  <link rel="stylesheet" href="styles.css?v=5.1.0">
 </head>
 <body>
 
@@ -161,11 +161,16 @@
         <div class="toolbar-buttons">
           <button class="btn btn-sheet" id="fixSheetBtn" title="修正申請スプレッドシートを横に並べて開く">📋 修正申請</button>
           <button class="btn btn-drive" id="driveBtn" title="Excel・JSONの保存先フォルダを横に並べて開く">📁 ドライブ</button>
-          <button class="btn btn-excel" id="exportBtn">📊 Excelエクスポート</button>
+          <button class="btn btn-excel" id="exportBtn">🖨 印刷</button>
           <button class="btn btn-success" id="backupBtn">バックアップ</button>
           <button class="btn btn-warning" id="restoreBtn">リストア</button>
           <input type="file" id="restoreFile" accept=".json" style="display:none;">
           <button class="btn btn-danger" id="clearDataBtn">全データ削除</button>
+        </div>
+        <!-- 保存先フォルダ（最初に1回選ぶと、以後は変更のたびに自動保存） -->
+        <div class="fs-bar">
+          <span id="fsStatus" class="fs-status"></span>
+          <button type="button" class="btn-link hidden" id="fsActionBtn"></button>
         </div>
       </section>
 
@@ -187,6 +192,6 @@
   <div class="footer"><span>©</span> 2026 SwiftRaptor</div>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.17.0/xlsx.full.min.js"></script>
-  <script src="script.js?v=5.0.4"></script>
+  <script src="script.js?v=5.1.0"></script>
 </body>
 </html>

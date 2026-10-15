@@ -685,3 +685,16 @@ input:focus, select:focus { border-color: var(--accent); }
   color: var(--text-secondary);
   padding: 16px 0 24px;
 }
+
+/* 保存先フォルダの表示（ツールバーの下） */
+.fs-bar {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border);
+  font-size: 13px;
+}
+.fs-status { color: var(--text-secondary); }
+.fs-status.fs-warn { color: #d97706; font-weight: 600; }
+
+/* 印刷ダイアログの下：予備のExcel出力 */
+.export-alt { text-align: center; padding: 8px 0 12px; border-top: 1px solid var(--border); }
+.export-alt .btn-link { font-size: 12px; }

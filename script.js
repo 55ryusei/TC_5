@@ -211,6 +211,7 @@ function loadData() { return loadDataFor(getMode()); }
 
 function saveData(data) {
   localStorage.setItem(modeCfg().storageKey, JSON.stringify(data));
+  scheduleFolderSave();          // フォルダ連携中なら、そちらにも自動で保存する
 }
 
 function updateNameUsageOrder(name) {
@@ -856,9 +857,14 @@ async function requestPasswordAndClearData() {
   const password = await showPromptDialog('データクリア', `【${modeCfg().label}】の全データを削除します。パスワードを入力してください:`, '', 'password');
   if (password === null) return;
   if (password !== ADMIN_PASSWORD) { showToast('パスワードが違います', 'error'); return; }
-  const ok = await showConfirmDialog('データクリア確認', `本当に【${modeCfg().label}】のすべてのデータをクリアしますか？`, '削除');
+  // フォルダ連携中は、フォルダの中身も空になる（自動保存なので）。そのことを先に伝える
+  const inFolder = dirHandle && fsReady
+    ? `\n\nフォルダ「${dirHandle.name}」に保存されている【${modeCfg().label}】の勤怠も空になります。`
+    : '';
+  const ok = await showConfirmDialog('データクリア確認', `本当に【${modeCfg().label}】のすべてのデータをクリアしますか？${inFolder}`, '削除');
   if (!ok) return;
   localStorage.removeItem(modeCfg().storageKey);
+  scheduleFolderSave();
   refreshNameList();
   displayTimeCards();
   showToast('すべてのデータを削除しました', 'success');
@@ -1068,6 +1074,7 @@ function loadAlwaysExportEmpty() {
 
 function saveAlwaysExportEmpty(names) {
   localStorage.setItem(ALWAYS_EMPTY_KEY, JSON.stringify(names));
+  markSettingsChanged();
 }
 
 // 並び順の保存先（通常・スイミング共通の1本）
@@ -1084,6 +1091,7 @@ function loadExportOrder() {
 
 function saveExportOrder(names) {
   localStorage.setItem(ORDER_KEY, JSON.stringify(names));
+  markSettingsChanged();
 }
 
 // 従業員ごとの属性（資格有無・バス添乗）。通常／スイミング共通で名前をキーに保存。
@@ -1110,6 +1118,7 @@ function setEmployeeAttr(name, attr) {
   const all = loadEmployeeAttrs();
   all[name] = { qualified: !!attr.qualified, bus: !!attr.bus };
   localStorage.setItem(EMP_ATTR_KEY, JSON.stringify(all));
+  markSettingsChanged();
 }
 
 /* 従業員設定（並び順・資格／バス・手書き用の人）の書き出しと読み込み。
@@ -1152,6 +1161,7 @@ function importEmployeeSettings(file, done) {
           attrs[String(n)] = { qualified: !!(a && a.qualified), bus: !!(a && a.bus) };
         }
         localStorage.setItem(EMP_ATTR_KEY, JSON.stringify(attrs));
+        markSettingsChanged();
       }
       if (Array.isArray(d.alwaysExportEmpty)) {
         saveAlwaysExportEmpty(d.alwaysExportEmpty.map(n => String(n).trim()).filter(Boolean));
@@ -1185,6 +1195,7 @@ function loadWages() {
 
 function saveWages(wages) {
   localStorage.setItem(WAGE_KEY, JSON.stringify(wages));
+  markSettingsChanged();
 }
 
 function orderedUserNames(names) {
@@ -1206,7 +1217,7 @@ function exportCandidateNames(scope) {
 
 function showExportDialog() {
   if (exportCandidateNames('current').length === 0) {
-    showToast('エクスポートするデータがありません', 'warning');
+    showToast('印刷するデータがありません', 'warning');
     return;
   }
 
@@ -1217,7 +1228,7 @@ function showExportDialog() {
   dialog.innerHTML = `
     <div class="ios-dialog-content" style="width: 440px;">
       <div class="ios-dialog-header">
-        <div class="ios-dialog-title">Excelエクスポート</div>
+        <div class="ios-dialog-title">🖨 印刷</div>
       </div>
       <div class="export-body">
         <div class="form-group">
@@ -1228,7 +1239,7 @@ function showExportDialog() {
           </select>
         </div>
         <div class="form-group">
-          <label>エクスポートする従業員（ドラッグまたは▲▼で並び順を変更・自動保存、上から順にシートになります）</label>
+          <label>印刷する従業員（ドラッグまたは▲▼で並び順を変更・自動保存、上から順に1人1枚で印刷されます）</label>
           <div class="user-checkbox-list" id="userOrderList"></div>
           <div class="rank-legend">
             <div class="rank-legend-title">合計まとめ A〜E 振り分け</div>
@@ -1240,11 +1251,11 @@ function showExportDialog() {
           </div>
         </div>
         <div class="form-group">
-          <label>データが無くてもシートを出力する人（手書き用・カンマ区切り・自動保存）</label>
+          <label>データが無くても印刷する人（手書き用の空の表・カンマ区切り・自動保存）</label>
           <input type="text" id="alwaysEmptyInput" placeholder="例: 山田, 佐藤" value="${esc(loadAlwaysExportEmpty().join(', '))}">
         </div>
         <div class="form-group">
-          <label>並び順・資格／バス・手書き用の設定はこの端末に保存されています。別の端末へ移すときに使います</label>
+          <label>並び順・資格／バス・手書き用・時給の設定は、保存先フォルダにも自動で保存されます（フォルダを選んでいれば、ほかのPCでも同じ設定になります）。ファイルで受け渡すときはこちら</label>
           <div style="display:flex; gap:8px;">
             <button type="button" class="btn btn-secondary" id="exportSettingsBtn">設定を書き出す</button>
             <button type="button" class="btn btn-secondary" id="importSettingsBtn">設定を読み込む</button>
@@ -1252,11 +1263,11 @@ function showExportDialog() {
           </div>
         </div>
         <div class="form-group">
-          <label>A〜E の時給（円・変更すると自動保存。Excelのヘッダーに表示されます）</label>
+          <label>A〜E の時給（円・変更すると自動保存。合計まとめの見出しに表示されます）</label>
           <div class="wage-inputs" id="wageInputs"></div>
         </div>
         <div class="form-group">
-          <label>エクスポート期間</label>
+          <label>期間</label>
           <select id="exportPeriodType">
             <option value="all">すべてのデータ</option>
             <option value="latest" selected>最新の月（11日〜翌月10日）</option>
@@ -1279,8 +1290,9 @@ function showExportDialog() {
       </div>
       <div class="ios-dialog-buttons">
         <button class="ios-dialog-button" id="exportCancelBtn">キャンセル</button>
-        <button class="ios-dialog-button primary" id="exportExecuteBtn">エクスポート</button>
+        <button class="ios-dialog-button primary" id="exportExecuteBtn">🖨 印刷する</button>
       </div>
+      <div class="export-alt"><button type="button" class="btn-link" id="exportExcelBtn">Excelで出す（予備）</button></div>
     </div>`;
   document.body.appendChild(dialog);
 
@@ -1444,11 +1456,12 @@ function showExportDialog() {
   });
 
   dialog.querySelector('#exportCancelBtn').addEventListener('click', closeDialog);
-  dialog.querySelector('#exportExecuteBtn').addEventListener('click', () => performExport(dialog, closeDialog));
+  dialog.querySelector('#exportExecuteBtn').addEventListener('click', () => performExport(dialog, closeDialog, 'print'));
+  dialog.querySelector('#exportExcelBtn').addEventListener('click', () => performExport(dialog, closeDialog, 'excel'));
   dialog.addEventListener('click', e => { if (e.target === dialog) closeDialog(); });
 }
 
-function performExport(dialog, closeDialog) {
+function performExport(dialog, closeDialog, action) {
   const selectedUsers = [...dialog.querySelectorAll('.userCheckbox:checked')].map(cb => cb.value);
   if (selectedUsers.length === 0) { showToast('少なくとも1人の従業員を選択してください', 'warning'); return; }
 
@@ -1484,15 +1497,23 @@ function performExport(dialog, closeDialog) {
   }
 
   closeDialog();
-  exportToExcel(startDate, endDate, exportType, selectedUsers, raiseDateValue ? new Date(raiseDateValue) : null, scope);
+  const raise = raiseDateValue ? new Date(raiseDateValue) : null;
+  if (action === 'excel') exportToExcel(startDate, endDate, exportType, selectedUsers, raise, scope);
+  else printTimesheets(startDate, endDate, exportType, selectedUsers, raise, scope);
 }
 
-function exportToExcel(startDate, endDate, exportType, selectedUsers, raiseDate, scope) {
-  // scope: 'current'＝今のモードのみ／'both'＝通常＋スイミングを1つのワークブックに
+/*
+ *  出力する中身（1人1枚の表と、合計まとめ）を組み立てる。印刷とExcelで同じものを使う。
+ *  返すもの：{ sheets:[{name, person, mode, aoa}], summary:{aoa, legendStart, legendLines}|null,
+ *            filename（拡張子なし）, minDate, maxDate }。出すものが無ければ null。
+ */
+function buildExportBook(startDate, endDate, exportType, selectedUsers, raiseDate, scope) {
+  // scope: 'current'＝今のモードのみ／'both'＝通常＋スイミングを1つにまとめる
   const modesToExport = scope === 'both' ? ['normal', 'swim'] : [getMode()];
   const dataByMode = {};
   modesToExport.forEach(m => { dataByMode[m] = loadDataFor(m); });
-  const workbook = XLSX.utils.book_new();
+  const sheets = [];
+  let summary = null;
   let sheetCount = 0;
   let actualMinDate = null;
   let actualMaxDate = null;
@@ -1664,27 +1685,11 @@ function exportToExcel(startDate, endDate, exportType, selectedUsers, raiseDate,
         sheetData.push(["日付","出勤時間","退勤時間","合計時間","早朝勤務","夕方勤務","朝夕合計","通常合計","勤務種別"]);
       }
     }
-    const worksheet = XLSX.utils.aoa_to_sheet(sheetData);
-    // 列幅：ヘッダー（出勤時間・退勤時間 等の4文字）が切れず全部見えるように広めに確保
-    worksheet['!cols'] = [
-      { wch: 12 }, // 日付
-      { wch: 11 }, // 出勤時間
-      { wch: 11 }, // 退勤時間
-      { wch: 11 }, // 合計時間
-      { wch: 11 }, // 早朝勤務
-      { wch: 11 }, // 夕方勤務
-      { wch: 11 }, // 朝夕合計
-      { wch: 11 }, // 通常合計
-      { wch: 11 }  // 勤務種別
-    ];
-    XLSX.utils.book_append_sheet(workbook, worksheet, sheetName.slice(0, 31));
+    sheets.push({ name: sheetName.slice(0, 31), person: name, mode, aoa: sheetData });
     sheetCount++;
   }
 
-  if (sheetCount === 0) {
-    showToast('選択した期間にデータがありません', 'warning');
-    return;
-  }
+  if (sheetCount === 0) return null;
 
   // 最後のシート：各人の合計時間を日給ランク A〜E に振り分けてまとめる
   if (summaryOrder.length > 0) {
@@ -1726,6 +1731,54 @@ function exportToExcel(startDate, endDate, exportType, selectedUsers, raiseDate,
     ];
     legendLines.forEach(line => summaryData.push([line]));
 
+    summary = { aoa: summaryData, legendStart, legendLines };
+  }
+
+  // ファイル名: R{令和}.{開始月}-{終了月}（スイミングは_SW付き）
+  let filename;
+  if (exportType === 'all' && actualMinDate && actualMaxDate) {
+    const minP = getMonthPeriod(toDateStr(actualMinDate));
+    const maxP = getMonthPeriod(toDateStr(actualMaxDate));
+    filename = `R${minP.start.getFullYear() - 2018}.${minP.start.getMonth() + 1}-${maxP.end.getMonth() + 1}`;
+  } else if (exportType === 'latest') {
+    const { start, end } = getLatestDataPeriod();
+    filename = `R${start.getFullYear() - 2018}.${start.getMonth() + 1}-${end.getMonth() + 1}`;
+  } else {
+    filename = `R${startDate.getFullYear() - 2018}.${startDate.getMonth() + 1}.${startDate.getDate()}-${endDate.getMonth() + 1}.${endDate.getDate()}`;
+  }
+  if (scope === 'both') filename += '_通常+SW';
+  else if (getMode() === 'swim') filename += '_SW';
+
+  return { sheets, summary, filename, minDate: actualMinDate, maxDate: actualMaxDate };
+}
+
+// 予備：Excelで出す（中身は buildExportBook で組み立てたもの）
+function exportToExcel(startDate, endDate, exportType, selectedUsers, raiseDate, scope) {
+  const book = buildExportBook(startDate, endDate, exportType, selectedUsers, raiseDate, scope);
+  if (!book) {
+    showToast('選択した期間にデータがありません', 'warning');
+    return;
+  }
+  const workbook = XLSX.utils.book_new();
+  for (const s of book.sheets) {
+    const worksheet = XLSX.utils.aoa_to_sheet(s.aoa);
+    // 列幅：ヘッダー（出勤時間・退勤時間 等の4文字）が切れず全部見えるように広めに確保
+    worksheet['!cols'] = [
+      { wch: 12 }, // 日付
+      { wch: 11 }, // 出勤時間
+      { wch: 11 }, // 退勤時間
+      { wch: 11 }, // 合計時間
+      { wch: 11 }, // 早朝勤務
+      { wch: 11 }, // 夕方勤務
+      { wch: 11 }, // 朝夕合計
+      { wch: 11 }, // 通常合計
+      { wch: 11 }  // 勤務種別
+    ];
+    XLSX.utils.book_append_sheet(workbook, worksheet, s.name);
+  }
+
+  if (book.summary) {
+    const { aoa: summaryData, legendStart, legendLines } = book.summary;
     const summarySheet = XLSX.utils.aoa_to_sheet(summaryData);
     // 列幅（名前は広め、数値列もゆったり）
     summarySheet['!cols'] = [
@@ -1748,24 +1801,130 @@ function exportToExcel(startDate, endDate, exportType, selectedUsers, raiseDate,
     XLSX.utils.book_append_sheet(workbook, summarySheet, "合計まとめ");
   }
 
-  // ファイル名: R{令和}.{開始月}-{終了月}（スイミングは_SW付き）
-  let filename;
-  if (exportType === 'all' && actualMinDate && actualMaxDate) {
-    const minP = getMonthPeriod(toDateStr(actualMinDate));
-    const maxP = getMonthPeriod(toDateStr(actualMaxDate));
-    filename = `R${minP.start.getFullYear() - 2018}.${minP.start.getMonth() + 1}-${maxP.end.getMonth() + 1}`;
-  } else if (exportType === 'latest') {
-    const { start, end } = getLatestDataPeriod();
-    filename = `R${start.getFullYear() - 2018}.${start.getMonth() + 1}-${end.getMonth() + 1}`;
-  } else {
-    filename = `R${startDate.getFullYear() - 2018}.${startDate.getMonth() + 1}.${startDate.getDate()}-${endDate.getMonth() + 1}.${endDate.getDate()}`;
-  }
-  if (scope === 'both') filename += '_通常+SW';
-  else if (getMode() === 'swim') filename += '_SW';
-  filename += '.xlsx';
-
-  writeWorkbookFile(workbook, filename);
+  writeWorkbookFile(workbook, book.filename + '.xlsx');
   showToast('Excelファイルを出力しました', 'success');
+}
+
+/* ============ 印刷（Excelを使わずTC5から直接） ============ */
+
+const PRINT_HEADER = ["日付","出勤時間","退勤時間","合計時間","早朝勤務","夕方勤務","朝夕合計","通常合計","勤務種別"];
+
+// 印刷するページの見た目。アプリの画面用CSSは使わず、これだけを当てる
+const PRINT_CSS = `
+@page { size: A4 portrait; margin: 11mm 12mm; }
+* { box-sizing: border-box; }
+body { margin: 0; color: #000; background: #fff;
+  font-family: "Yu Gothic", "YuGothic", "Meiryo", "Hiragino Kaku Gothic ProN", sans-serif; font-size: 10pt; }
+.page { page-break-after: always; break-after: page; }
+.page:last-child { page-break-after: auto; break-after: auto; }
+.head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 3mm;
+  border-bottom: 1.5px solid #000; padding-bottom: 1.5mm; }
+h1 { font-size: 14pt; margin: 0; }
+.meta { font-size: 9pt; color: #333; }
+h2 { font-size: 10.5pt; margin: 4mm 0 1.5mm; }
+table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+th, td { border: 1px solid #666; padding: 1mm 1.2mm; text-align: center; font-size: 9.5pt; line-height: 1.35; }
+thead th { background: #e8e8e8; font-weight: 600; }
+td.num { text-align: right; font-variant-numeric: tabular-nums; }
+td.paid { font-weight: 700; }
+tr.total td { font-weight: 700; background: #f2f2f2; border-top: 2px solid #000; }
+tr.blank td { height: 7mm; }
+col.c-date { width: 12%; } col.c-time { width: 11%; }
+.summary th, .summary td { font-size: 10.5pt; padding: 1.8mm 2mm; }
+.summary td:first-child { text-align: left; }
+.legend { margin-top: 6mm; font-size: 9.5pt; line-height: 1.8; }
+.legend b { display: block; margin-bottom: 1mm; }
+`;
+
+// 1人分の表（aoa）を、見出し・小見出し（昇給前／後）・明細・合計に分ける
+function splitSheetBlocks(aoa) {
+  const blocks = [];
+  let cur = null;
+  const isHeader = row => row.length === PRINT_HEADER.length && row.every((v, i) => v === PRINT_HEADER[i]);
+  for (let i = 1; i < aoa.length; i++) {
+    const row = aoa[i] || [];
+    if (row.length === 0) continue;
+    const first = String(row[0] == null ? '' : row[0]);
+    if (row.length === 1 && first.startsWith('■')) { cur = { title: first.replace(/^■\s*/, ''), rows: [], total: null }; blocks.push(cur); continue; }
+    if (!cur) { cur = { title: '', rows: [], total: null }; blocks.push(cur); }
+    if (isHeader(row)) continue;
+    if (first === '合計' || /^【.*合計】$/.test(first)) { cur.total = row; continue; }
+    cur.rows.push(row);
+  }
+  if (!blocks.length) blocks.push({ title: '', rows: [], total: null });
+  return blocks;
+}
+
+function printSheetHtml(sheet, periodText) {
+  const title = String((sheet.aoa[0] || [''])[0] || sheet.name);
+  const blocks = splitSheetBlocks(sheet.aoa);
+  const handwriting = blocks.every(b => b.rows.length === 0 && !b.total);
+  const cell = (v, i) => {
+    const s = v == null ? '' : String(v);
+    const cls = i >= 3 && i <= 7 ? ' class="num"' : (i === 8 && s ? ' class="paid"' : '');
+    return `<td${cls}>${esc(s)}</td>`;
+  };
+  const table = b => `
+    ${b.title ? `<h2>■ ${esc(b.title)}</h2>` : ''}
+    <table>
+      <colgroup><col class="c-date">${'<col class="c-time">'.repeat(8)}</colgroup>
+      <thead><tr>${PRINT_HEADER.map(h => `<th>${h}</th>`).join('')}</tr></thead>
+      <tbody>
+        ${b.rows.map(r => `<tr>${PRINT_HEADER.map((_, i) => cell(r[i], i)).join('')}</tr>`).join('')}
+        ${handwriting ? ('<tr class="blank">' + '<td></td>'.repeat(9) + '</tr>').repeat(25) : ''}
+        ${b.total
+          // 合計の行は出勤・退勤が空なので、見出し（【昇給前合計】など）を3列ぶん使って1行に収める
+          ? `<tr class="total"><td colspan="3">${esc(b.total[0])}</td>${PRINT_HEADER.slice(3).map((_, k) => cell(b.total[k + 3], k + 3)).join('')}</tr>`
+          : ''}
+      </tbody>
+    </table>`;
+  return `<section class="page">
+    <div class="head"><h1>${esc(title)}</h1><div class="meta">${esc(periodText)}</div></div>
+    ${blocks.map(table).join('')}
+  </section>`;
+}
+
+function printSummaryHtml(summary, periodText) {
+  const aoa = summary.aoa;
+  const header = aoa[2] || [];
+  const rows = aoa.slice(3, summary.legendStart - 1).filter(r => r && r.length);
+  return `<section class="page">
+    <div class="head"><h1>${esc(aoa[0][0])}</h1><div class="meta">${esc(periodText)}</div></div>
+    <table class="summary">
+      <thead><tr>${header.map(h => `<th>${esc(h)}</th>`).join('')}</tr></thead>
+      <tbody>${rows.map(r => `<tr>${r.map((v, i) => i === 0 ? `<td>${esc(v)}</td>` : `<td class="num">${esc(v)}</td>`).join('')}</tr>`).join('')}</tbody>
+    </table>
+    <div class="legend"><b>${esc(summary.legendLines[0])}</b>${summary.legendLines.slice(1).map(l => `<div>${esc(l)}</div>`).join('')}</div>
+  </section>`;
+}
+
+// 印刷用のページ全体（HTML）。テストからも使えるよう、組み立てだけを分けておく
+function buildPrintHtml(book, periodText) {
+  const pages = book.sheets.map(s => printSheetHtml(s, periodText)).join('')
+    + (book.summary ? printSummaryHtml(book.summary, periodText) : '');
+  return `<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8">`
+    + `<title>勤怠_${esc(book.filename)}</title><style>${PRINT_CSS}</style></head><body>${pages}</body></html>`;
+}
+
+// 印刷する。印刷専用のページを新しいタブに作って、そこから刷る（アプリの画面は刷らない）
+function printTimesheets(startDate, endDate, exportType, selectedUsers, raiseDate, scope) {
+  const book = buildExportBook(startDate, endDate, exportType, selectedUsers, raiseDate, scope);
+  if (!book) { showToast('選択した期間にデータがありません', 'warning'); return; }
+  const from = exportType === 'all' ? book.minDate : startDate;
+  const to = exportType === 'all' ? book.maxDate : endDate;
+  const ymd = d => d ? `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}` : '';
+  const periodText = `期間：${ymd(from)}〜${ymd(to)}`;
+
+  const w = window.open('', '_blank');
+  if (!w) { showToast('新しいタブを開けませんでした。ポップアップを許可してください', 'warning'); return; }
+  w.document.write(buildPrintHtml(book, periodText));
+  w.document.close();
+  w.onload = () => {
+    w.focus();
+    w.print();
+    w.onafterprint = () => w.close();
+  };
+  showToast(`${book.sheets.length}人ぶんを新しいタブで印刷します`, 'success');
 }
 
 /*
@@ -1977,6 +2136,374 @@ function restoreData(file, mode) {
   reader.readAsText(file);
 }
 
+/* ============ 11.5 フォルダ連携（月末会計・有給管理と同じ方式） ============ */
+/*
+ *  最初に1回フォルダを選ぶと、ブラウザが覚えておき、以後は変更のたびにそのフォルダへ自動で保存する。
+ *    勤怠データ_R8.9-10.json … 締め期間（11日〜翌10日）ごとに1ファイル。通常とスイミングの両方が入る
+ *    勤怠データ_設定.json   … 並び順・資格／バス・手書き用・A〜Eの時給
+ *  このPCの中（localStorage）が作業用、フォルダが保管用。開いたときに両方を突き合わせ、
+ *  どちらか一方にしか無い記録があれば、黙って消さずにどうするか聞く。
+ */
+const FS_SUPPORTED = typeof window !== 'undefined' && 'showDirectoryPicker' in window;
+const FS_DB_NAME = 'tc5FS';                 // 有給管理（yk_fs）・月末会計（getsumatsuFS）とは別の入れ物
+const DATA_FILE_RE = /^勤怠データ_R\d+\.\d+-\d+\.json$/;
+const SETTINGS_FILE = '勤怠データ_設定.json';
+const SETTINGS_TIME_KEY = 'tc_settingsSavedAt';
+let dirHandle = null;
+let fsReady = false;        // フォルダと突き合わせ済みか。済むまでは書き込まない
+let fsBusy = false;
+let fsTimer = null;
+let fsWritten = {};         // ファイル名 → { key, core }。いまフォルダにある中身（変わったファイルだけ書く）
+let fsState = 'none';
+
+function tc5IdbOpen() {
+  return new Promise((res, rej) => {
+    const r = indexedDB.open(FS_DB_NAME, 1);
+    r.onupgradeneeded = () => r.result.createObjectStore('kv');
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+  });
+}
+async function tc5IdbSet(k, v) {
+  const db = await tc5IdbOpen();
+  return new Promise((res, rej) => {
+    const t = db.transaction('kv', 'readwrite');
+    t.objectStore('kv').put(v, k);
+    t.oncomplete = () => res();
+    t.onerror = () => rej(t.error);
+  });
+}
+async function tc5IdbGet(k) {
+  const db = await tc5IdbOpen();
+  return new Promise((res, rej) => {
+    const rq = db.transaction('kv', 'readonly').objectStore('kv').get(k);
+    rq.onsuccess = () => res(rq.result);
+    rq.onerror = () => rej(rq.error);
+  });
+}
+
+// 期間キー "2026-09" → "勤怠データ_R8.9-10.json"
+function periodFileName(key) {
+  const y = +key.slice(0, 4), m = +key.slice(5, 7);
+  return `勤怠データ_R${y - 2018}.${m}-${m === 12 ? 1 : m + 1}.json`;
+}
+
+// 名前・日付の順をそろえる（同じ中身なら同じ文字列になるように）
+function canonModeData(d) {
+  const out = {};
+  for (const n of Object.keys(d || {}).sort()) {
+    const days = d[n] || {};
+    const keys = Object.keys(days).filter(k => Array.isArray(days[k]) && days[k].length).sort();
+    if (!keys.length) continue;
+    out[n] = {};
+    for (const k of keys) out[n][k] = days[k];
+  }
+  return out;
+}
+
+function periodCore(key, normal, swim) {
+  return JSON.stringify({ format: 'tc5-kintai', version: 1, period: key, label: periodLabelOf(key),
+    normal: canonModeData(normal), swim: canonModeData(swim) });
+}
+
+// このPCの勤怠を、期間ごとのファイルの中身にする。ファイル名 → { key, core }
+function buildDataFiles() {
+  const byPeriod = {};
+  for (const mode of ['normal', 'swim']) {
+    const data = loadDataFor(mode);
+    for (const name in data) {
+      for (const d in data[name]) {
+        if (!Array.isArray(data[name][d]) || !data[name][d].length) continue;
+        const key = periodKeyOf(d);
+        const p = byPeriod[key] = byPeriod[key] || { normal: {}, swim: {} };
+        (p[mode][name] = p[mode][name] || {})[d] = data[name][d];
+      }
+    }
+  }
+  const files = {};
+  for (const key of Object.keys(byPeriod)) {
+    files[periodFileName(key)] = { key, core: periodCore(key, byPeriod[key].normal, byPeriod[key].swim) };
+  }
+  return files;
+}
+
+function settingsCore() {
+  return JSON.stringify({ format: 'tc5-settings', version: 1,
+    exportOrder: loadExportOrder(), employeeAttrs: loadEmployeeAttrs(),
+    alwaysExportEmpty: loadAlwaysExportEmpty(), rankWages: loadWages() });
+}
+
+// 設定を変えたとき：変えた時刻を覚えて、フォルダへの保存を予約する
+function markSettingsChanged() {
+  localStorage.setItem(SETTINGS_TIME_KEY, new Date().toISOString());
+  scheduleFolderSave();
+}
+
+function scheduleFolderSave() {
+  if (!dirHandle || !fsReady) return;
+  clearTimeout(fsTimer);
+  fsTimer = setTimeout(flushFolder, 800);
+}
+
+async function writeFolderFile(name, core, savedAt) {
+  const obj = JSON.parse(core);
+  obj.savedAt = savedAt || new Date().toISOString();
+  const fh = await dirHandle.getFileHandle(name, { create: true });
+  const w = await fh.createWritable();
+  await w.write(JSON.stringify(obj, null, 2));
+  await w.close();
+}
+
+// 変わったファイルだけフォルダへ書く。データが無くなった期間は空にする（消したことが伝わるように）
+async function flushFolder() {
+  clearTimeout(fsTimer);
+  fsTimer = null;
+  if (!dirHandle || !fsReady) return false;
+  if (fsBusy) { scheduleFolderSave(); return false; }
+  fsBusy = true;
+  try {
+    if ((await dirHandle.queryPermission({ mode: 'readwrite' })) !== 'granted') { setFsStatus('perm'); return false; }
+    const files = buildDataFiles();
+    for (const name of Object.keys(fsWritten)) {
+      if (DATA_FILE_RE.test(name) && !files[name]) files[name] = { key: fsWritten[name].key, core: periodCore(fsWritten[name].key, {}, {}) };
+    }
+    files[SETTINGS_FILE] = { core: settingsCore() };
+    for (const name of Object.keys(files)) {
+      const f = files[name];
+      if (fsWritten[name] && fsWritten[name].core === f.core) continue;
+      const savedAt = name === SETTINGS_FILE ? (localStorage.getItem(SETTINGS_TIME_KEY) || undefined) : undefined;
+      await writeFolderFile(name, f.core, savedAt);
+      fsWritten[name] = f;
+    }
+    setFsStatus('saved');
+    return true;
+  } catch (e) {
+    console.warn('フォルダへの保存に失敗:', e);
+    setFsStatus('error');
+    return false;
+  } finally {
+    fsBusy = false;
+  }
+}
+
+// フォルダの中身を読む
+async function readFolderFiles() {
+  const out = { data: { normal: {}, swim: {} }, files: {}, settings: null, dataFiles: 0, broken: [] };
+  for await (const [name, handle] of dirHandle.entries()) {
+    if (handle.kind !== 'file') continue;
+    if (!DATA_FILE_RE.test(name) && name !== SETTINGS_FILE) continue;
+    let obj;
+    try { obj = JSON.parse(await (await handle.getFile()).text()); } catch { out.broken.push(name); continue; }
+    if (name === SETTINGS_FILE) {
+      if (obj && obj.format === 'tc5-settings') {
+        out.settings = obj;
+        out.files[name] = { core: JSON.stringify({ format: 'tc5-settings', version: 1,
+          exportOrder: obj.exportOrder || [], employeeAttrs: obj.employeeAttrs || {},
+          alwaysExportEmpty: obj.alwaysExportEmpty || [], rankWages: obj.rankWages || {} }) };
+      }
+      continue;
+    }
+    if (!obj || obj.format !== 'tc5-kintai' || !/^\d{4}-\d{2}$/.test(obj.period)) { out.broken.push(name); continue; }
+    out.dataFiles++;
+    out.files[name] = { key: obj.period, core: periodCore(obj.period, obj.normal, obj.swim) };
+    for (const mode of ['normal', 'swim']) {
+      const src = obj[mode] || {};
+      for (const n in src) for (const d in src[n]) {
+        if (!Array.isArray(src[n][d]) || !src[n][d].length) continue;
+        (out.data[mode][n] = out.data[mode][n] || {})[d] = src[n][d];
+      }
+    }
+  }
+  return out;
+}
+
+// 記録1件を見分ける鍵（モード｜名前｜日付｜出勤｜退勤｜有給）。同じものが2件あっても数える
+function recordCounts(both) {
+  const m = new Map();
+  for (const mode of ['normal', 'swim']) {
+    const d = both[mode] || {};
+    for (const n in d) for (const day in d[n]) for (const c of (d[n][day] || [])) {
+      if (!c) continue;
+      const k = [mode, n, day, c.checkIn || '', c.checkOut || '', c.isPaidLeave ? 1 : 0].join('|');
+      m.set(k, (m.get(k) || 0) + 1);
+    }
+  }
+  return m;
+}
+
+// このPCとフォルダの違い（片方にしか無い記録の件数）
+function compareWithFolder(local, folder) {
+  const a = recordCounts(local), b = recordCounts(folder);
+  let localOnly = 0, folderOnly = 0;
+  for (const [k, n] of a) localOnly += Math.max(0, n - (b.get(k) || 0));
+  for (const [k, n] of b) folderOnly += Math.max(0, n - (a.get(k) || 0));
+  return { localOnly, folderOnly };
+}
+
+function applyBothModes(both) {
+  localStorage.setItem(MODES.normal.storageKey, JSON.stringify(both.normal || {}));
+  localStorage.setItem(MODES.swim.storageKey, JSON.stringify(both.swim || {}));
+}
+
+function applySettingsFromFolder(s) {
+  if (Array.isArray(s.exportOrder)) localStorage.setItem(ORDER_KEY, JSON.stringify(s.exportOrder));
+  if (s.employeeAttrs && typeof s.employeeAttrs === 'object') localStorage.setItem(EMP_ATTR_KEY, JSON.stringify(s.employeeAttrs));
+  if (Array.isArray(s.alwaysExportEmpty)) localStorage.setItem(ALWAYS_EMPTY_KEY, JSON.stringify(s.alwaysExportEmpty));
+  if (s.rankWages && typeof s.rankWages === 'object') localStorage.setItem(WAGE_KEY, JSON.stringify(s.rankWages));
+  if (s.savedAt) localStorage.setItem(SETTINGS_TIME_KEY, s.savedAt);
+}
+
+// フォルダとこのPCの両方にしか無い記録があるとき、どうするか聞く
+function chooseFolderConflict(diff) {
+  return new Promise(resolve => {
+    const dialog = document.createElement('div');
+    dialog.className = 'ios-dialog';
+    dialog.innerHTML = `
+      <div class="ios-dialog-content">
+        <div class="ios-dialog-header">
+          <div class="ios-dialog-title">フォルダとこのPCの内容が違います</div>
+          <div class="ios-dialog-message" style="white-space:pre-line;">${esc(
+            `このPCにだけある記録：${diff.localOnly}件\nフォルダにだけある記録：${diff.folderOnly}件\n\n`
+            + 'ほかのPCで直したり消したりした可能性があります。どちらに合わせますか？')}</div>
+        </div>
+        <div class="ios-dialog-buttons" style="flex-direction: column;">
+          <button class="ios-dialog-button" data-act="folder" style="border-left:none;border-bottom:1px solid var(--border);">フォルダの内容にする（ふつうはこちら）</button>
+          <button class="ios-dialog-button" data-act="merge" style="border-left:none;border-bottom:1px solid var(--border);">両方を合わせる（どちらにも無いものだけ足す）</button>
+          <button class="ios-dialog-button primary" data-act="local" style="border-left:none;border-bottom:1px solid var(--border);">このPCの内容にする（フォルダだけの${diff.folderOnly}件は消える）</button>
+          <button class="ios-dialog-button" data-act="later" style="border-left:none;">あとで決める（フォルダには保存しない）</button>
+        </div>
+      </div>`;
+    document.body.appendChild(dialog);
+    dialog.addEventListener('click', e => {
+      const act = e.target.dataset && e.target.dataset.act;
+      if (!act) return;
+      dialog.style.opacity = '0';
+      setTimeout(() => dialog.remove(), 250);
+      resolve(act);
+    });
+  });
+}
+
+// フォルダと突き合わせる。済んだら自動保存を始める
+async function syncWithFolder() {
+  fsReady = false;
+  setFsStatus('syncing');
+  let folder;
+  try {
+    folder = await readFolderFiles();
+  } catch (e) {
+    console.warn('フォルダを読めない:', e);
+    setFsStatus('error');
+    return;
+  }
+  fsWritten = { ...folder.files };
+
+  // 設定：新しいほうに合わせる（フォルダのほうが新しい、またはこのPCに記録が無ければフォルダ）
+  if (folder.settings) {
+    const localAt = localStorage.getItem(SETTINGS_TIME_KEY);
+    if (!localAt || String(folder.settings.savedAt || '') > localAt) applySettingsFromFolder(folder.settings);
+  }
+
+  // 勤怠
+  const local = { normal: loadDataFor('normal'), swim: loadDataFor('swim') };
+  const diff = compareWithFolder(local, folder.data);
+  let message = '';
+  if (folder.dataFiles > 0 && diff.localOnly === 0 && diff.folderOnly > 0) {
+    applyBothModes(folder.data);
+    message = `フォルダから ${diff.folderOnly}件 の記録を読み込みました`;
+  } else if (folder.dataFiles > 0 && diff.localOnly > 0 && diff.folderOnly > 0) {
+    const act = await chooseFolderConflict(diff);
+    if (act === 'later') { setFsStatus('conflict'); return; }
+    if (act === 'folder') applyBothModes(folder.data);
+    else if (act === 'merge') {
+      applyBothModes({
+        normal: mergeTimeCards(local.normal, folder.data.normal).merged,
+        swim: mergeTimeCards(local.swim, folder.data.swim).merged
+      });
+    }
+    message = act === 'folder' ? 'フォルダの内容に合わせました'
+      : act === 'merge' ? '両方を合わせました' : 'このPCの内容をフォルダに保存しました';
+  } else if (diff.localOnly > 0) {
+    message = folder.dataFiles ? `このPCにだけある ${diff.localOnly}件 をフォルダに保存しました` : 'このPCの勤怠をフォルダに保存しました';
+  }
+
+  fsReady = true;
+  await flushFolder();
+  refreshNameList();
+  displayTimeCards();
+  if (folder.broken.length) showToast(`読めないファイルがありました：${folder.broken.join('、')}`, 'warning');
+  else if (message) showToast(message, 'success');
+}
+
+// 保存先フォルダを選ぶ（ユーザーの操作から呼ぶ）
+async function chooseFolder() {
+  if (!FS_SUPPORTED) {
+    showToast('このブラウザはフォルダ保存に対応していません（PCの Chrome か Edge で開いてください）', 'warning');
+    return;
+  }
+  let dh;
+  try {
+    dh = await window.showDirectoryPicker({ mode: 'readwrite', id: 'tc5-kintai' });
+  } catch (e) {
+    if (e.name !== 'AbortError') showToast('フォルダを選べませんでした: ' + e.message, 'error');
+    return;
+  }
+  dirHandle = dh;
+  fsReady = false;
+  fsWritten = {};
+  try { await tc5IdbSet('dirHandle', dh); } catch {}
+  await syncWithFolder();
+}
+
+// 前回のフォルダへの許可を取り直す（ユーザーの操作から呼ぶ）
+async function reconnectFolder() {
+  if (!dirHandle) { chooseFolder(); return; }
+  try {
+    if ((await dirHandle.requestPermission({ mode: 'readwrite' })) === 'granted') { await syncWithFolder(); return; }
+  } catch {}
+  setFsStatus('perm');
+}
+
+// 開いたとき：前回のフォルダを覚えていれば、許可があるか見て突き合わせる
+async function restoreFolder() {
+  if (!FS_SUPPORTED) { setFsStatus('unsupported'); return; }
+  try { dirHandle = (await tc5IdbGet('dirHandle')) || null; } catch { dirHandle = null; }
+  if (!dirHandle) { setFsStatus('none'); return; }
+  try {
+    if ((await dirHandle.queryPermission({ mode: 'readwrite' })) === 'granted') { await syncWithFolder(); return; }
+  } catch {}
+  setFsStatus('perm');
+}
+
+// 画面上の表示とボタン
+function setFsStatus(state) {
+  fsState = state;
+  const label = document.getElementById('fsStatus');
+  const btn = document.getElementById('fsActionBtn');
+  if (!label || !btn) return;
+  const name = dirHandle ? `「${dirHandle.name}」` : '';
+  const time = new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
+  const view = {
+    unsupported: ['💾 フォルダへの保存は、PCの Chrome か Edge で使えます', ''],
+    none:        ['💾 保存先フォルダ：まだ選んでいません', 'フォルダを選ぶ'],
+    perm:        [`💾 フォルダ${name}：再接続が必要です（ブラウザを開き直したため）`, '再接続'],
+    syncing:     [`💾 フォルダ${name}を確認しています…`, ''],
+    saved:       [`💾 フォルダ${name}に自動保存中（${time} 保存）`, '変更'],
+    error:       [`⚠ フォルダ${name}に保存できませんでした`, '再接続'],
+    conflict:    [`⚠ フォルダ${name}とこのPCの内容が違います（まだ保存していません）`, '確かめる']
+  }[state] || ['', ''];
+  label.textContent = view[0];
+  label.classList.toggle('fs-warn', state === 'perm' || state === 'error' || state === 'conflict' || state === 'none');
+  btn.textContent = view[1];
+  btn.classList.toggle('hidden', !view[1]);
+}
+
+function onFsAction() {
+  if (fsState === 'perm' || fsState === 'error') reconnectFolder();
+  else if (fsState === 'conflict') syncWithFolder();
+  else chooseFolder();
+}
+
 /* ============ 12. 初期化 ============ */
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -2129,7 +2656,25 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('cloudImportBtn').addEventListener('click', cloudImport);
   document.getElementById('cloudRawSaveBtn').addEventListener('click', cloudRawSave);
 
+  // 保存先フォルダ
+  document.getElementById('fsActionBtn').addEventListener('click', onFsAction);
+  // Ctrl+S：フォルダにすぐ保存（まだ選んでいなければフォルダを選ぶ）
+  document.addEventListener('keydown', async e => {
+    if (!(e.ctrlKey || e.metaKey) || String(e.key).toLowerCase() !== 's') return;
+    e.preventDefault();
+    if (dirHandle && fsReady) {
+      if (await flushFolder()) showToast(`フォルダ「${dirHandle.name}」に保存しました`, 'success');
+    } else {
+      onFsAction();
+    }
+  });
+  // 別のタブ（有給管理の「TC5へ直接反映」など）が勤怠を書き換えたら、フォルダにも保存する
+  window.addEventListener('storage', e => {
+    if (e.key === MODES.normal.storageKey || e.key === MODES.swim.storageKey) scheduleFolderSave();
+  });
+
   // 初期表示
   setMode(getMode());
   if (cloudToken) showCloudMain();
+  restoreFolder();
 });
