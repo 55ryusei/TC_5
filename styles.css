@@ -702,3 +702,9 @@ input:focus, select:focus { border-color: var(--accent); }
 /* 印刷画面：サンプルの人の目印 */
 .sample-tag { display: inline-block; margin-left: 4px; padding: 0 6px; border-radius: 8px;
   font-size: 11px; line-height: 18px; background: #fef3c7; color: #92400e; vertical-align: middle; }
+
+/* 印刷画面：休みの日（予定表）の設定。普段は閉じておく */
+.cal-settings { margin-top: 10px; font-size: 13px; }
+.cal-settings summary { cursor: pointer; color: var(--text-secondary); }
+.cal-settings input { margin-top: 6px; }
+.cal-settings .btn { margin-top: 8px; }

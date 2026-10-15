@@ -1059,23 +1059,8 @@ function calculateEveningTime(startTime, endTime) {
 // 並び順（通常・スイミング共通の印刷順）は、画面で並べ替えたものを端末に保存して使う。
 // このツールは公開リポジトリ（GitHub Pages）で配っているので、職員の氏名はソースに書かない。
 // 初期値は空（未設定の端末では五十音順）。別の端末へは、エクスポート画面の
-// 「設定を書き出す／読み込む」で並び順・資格／バス・手書き用の人をまとめて持っていく。
-
-// データが無くてもシートを出力する人（Excelに手書きで記入する人）。
-// これも氏名はソースに書かず、エクスポート画面で入力して端末に保存する。
-const ALWAYS_EMPTY_KEY = 'alwaysExportEmpty';
-
-function loadAlwaysExportEmpty() {
-  try {
-    const arr = JSON.parse(localStorage.getItem(ALWAYS_EMPTY_KEY) || '[]');
-    return Array.isArray(arr) ? arr.map(n => String(n).trim()).filter(Boolean) : [];
-  } catch { return []; }
-}
-
-function saveAlwaysExportEmpty(names) {
-  localStorage.setItem(ALWAYS_EMPTY_KEY, JSON.stringify(names));
-  markSettingsChanged();
-}
+// 「設定を書き出す／読み込む」で並び順・資格／バス・サンプルの人をまとめて持っていく。
+// （データが無くても空の表を印刷する「手書き用」の機能は、使わなくなったので外した。2026-10）
 
 // 印刷のときにサンプルを作る人（通常）。氏名はソースに書かず、印刷画面で入力して保存する。
 // 勤怠データには保存しない。印刷・Excelのたびに、選んだ期間の分をその場で作る。
@@ -1140,15 +1125,17 @@ function seededRandom(seed) {
   };
 }
 
-// サンプルの勤怠：from〜to の平日（土日祝を除く）に、午前（10時〜14時ごろ）と午後（15時〜19時ごろ）。
+// サンプルの勤怠：from〜to の平日に、午前（10時〜14時ごろ）と午後（15時〜19時ごろ）。
+// 休みの日は restDays（はくつるポータルの予定表で休みの日）で外す。予定表を読めないときは国民の祝日で外す。
 // 1日の合計は 7時間50分〜7時間59分（8時間は超えない）。出退勤の分は乱数で散らす
-function generateSampleCards(name, from, to) {
+function generateSampleCards(name, from, to, restDays) {
   const hm = min => `${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`;
   const cards = {};
   const last = toDateStr(to);
   for (let d = new Date(from.getFullYear(), from.getMonth(), from.getDate()); toDateStr(d) <= last; d.setDate(d.getDate() + 1)) {
     const day = toDateStr(d);
-    if (d.getDay() === 0 || d.getDay() === 6 || jpHolidays(d.getFullYear()).has(day)) continue;
+    if (d.getDay() === 0 || d.getDay() === 6) continue;
+    if (restDays ? restDays.has(day) : jpHolidays(d.getFullYear()).has(day)) continue;
     const r = seededRandom(`${name}|${day}`);
     const pick = (lo, hi) => lo + Math.floor(r() * (hi - lo + 1));
     const in1 = 600 + pick(-10, 10);            // 9:50〜10:10
@@ -1161,6 +1148,105 @@ function generateSampleCards(name, from, to) {
     ];
   }
   return cards;
+}
+
+/* はくつるポータルの予定表（園のGoogleカレンダー）から、園が休みの日を読む。
+   APIキーとカレンダーIDはソースに書かず、印刷画面で貼って保存する（保存先フォルダの設定にも入る）。
+   休みかどうかの決まりは、ポータルの classifyDay（portal/src/lib/calendarDay.js・dayType.js）と同じにしてある。
+   ポータル側の決まりを変えたら、ここも一緒に直すこと */
+const PORTAL_CAL_KEY = 'portalCalendar';
+
+function loadPortalCalendar() {
+  let o = {};
+  try { o = JSON.parse(localStorage.getItem(PORTAL_CAL_KEY) || '{}') || {}; } catch {}
+  return { apiKey: String(o.apiKey || '').trim(), calendarId: String(o.calendarId || '').trim(), muuminId: String(o.muuminId || '').trim() };
+}
+
+function savePortalCalendar(c) {
+  localStorage.setItem(PORTAL_CAL_KEY, JSON.stringify(c));
+  markSettingsChanged();
+}
+
+// ポータルの HOLIDAY_NAMES と同じ。名前で分かる休み（祝日・さいたま市民の日・夏休みなど）
+const PORTAL_HOLIDAY_NAMES = [
+  '元日', '成人の日', '建国記念の日', '天皇誕生日', '春分の日', '昭和の日',
+  '憲法記念日', 'みどりの日', 'こどもの日', '海の日', '山の日', '敬老の日',
+  '秋分の日', 'スポーツの日', '体育の日', '文化の日', '勤労感謝の日',
+  '振替休日', '国民の休日', 'さいたま市民の日', '県民の日',
+  '大晦日', 'お盆休み', '夏休み', '冬休み', '春休み', '休園'
+];
+
+// 休みの行事か：名前で分かる休み、または件名の先頭に【休】（【つぼみ】が前にあっても見る）
+function portalHolidayTitle(title) {
+  const t = String(title || '');
+  if (PORTAL_HOLIDAY_NAMES.some(n => t.includes(n))) return true;
+  let rest = t, holiday = false, tsubomi = false;
+  for (;;) {
+    if (!holiday && rest.startsWith('【休】')) { holiday = true; rest = rest.slice(3).trim(); }
+    else if (!tsubomi && rest.startsWith('【つぼみ】')) { tsubomi = true; rest = rest.slice(5).trim(); }
+    else break;
+  }
+  return holiday;
+}
+
+// 園が休みの日か（ポータルの classifyDay の restDay と同じ）。
+// 休みの行事がある日・日曜・行事が無く土曜かむーみん「なし」の日
+function portalRestDay(date, titles, muuminMark) {
+  const dow = new Date(`${date}T00:00:00`).getDay();
+  return titles.some(portalHolidayTitle) || dow === 0
+    || (titles.length === 0 && (dow === 6 || muuminMark === '/'));
+}
+
+// むーみんの件名 → 印（ポータルの muuminMark と同じ）
+function portalMuuminMark(title) {
+  if (title.includes('なし')) return '/';
+  if (title.includes('支援枠')) return '◎';
+  return '○';
+}
+
+async function fetchPortalCalendar(calendarId, apiKey, timeMin, timeMax) {
+  const q = new URLSearchParams({ key: apiKey, timeMin, timeMax, singleEvents: 'true', orderBy: 'startTime', maxResults: '2500' });
+  const res = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events?${q}`);
+  if (!res.ok) throw new Error(`Googleカレンダーの応答 ${res.status}`);
+  const data = await res.json();
+  // 終日の予定は start.date、時刻付きは start.dateTime。何日も続く予定も、ポータルと同じく始まりの日だけに数える
+  return (data.items || [])
+    .filter(e => e.status !== 'cancelled' && e.summary)
+    .map(e => ({ date: ((e.start && (e.start.date || e.start.dateTime)) || '').slice(0, 10), title: e.summary }))
+    .filter(e => e.date);
+}
+
+// from〜to のうち園が休みの日（"YYYY-MM-DD" の Set）。予定表が未設定なら null
+async function loadPortalRestDays(from, to) {
+  const c = loadPortalCalendar();
+  if (!c.apiKey || !c.calendarId) return null;
+  const end = new Date(to.getFullYear(), to.getMonth(), to.getDate() + 1);
+  const timeMin = `${toDateStr(from)}T00:00:00+09:00`, timeMax = `${toDateStr(end)}T00:00:00+09:00`;
+  const [events, muuminCal] = await Promise.all([
+    fetchPortalCalendar(c.calendarId, c.apiKey, timeMin, timeMax),
+    // むーみんは任意。読めなくても行事だけで判定する（ポータルと同じ）
+    c.muuminId ? fetchPortalCalendar(c.muuminId, c.apiKey, timeMin, timeMax).catch(() => []) : Promise.resolve([])
+  ]);
+  // 行事カレンダーに入っている「むーみん…」はむーみん扱い（ポータルと同じ）
+  const titles = {}, muuminList = [];
+  events.forEach(e => {
+    if (e.title.startsWith('むーみん')) muuminList.push(e);
+    else (titles[e.date] = titles[e.date] || []).push(e.title);
+  });
+  muuminList.push(...muuminCal);
+  // 同じ日に何件かあれば後のものを使う。「あり」は、その日の行がすでにある（行事か、先に印の付いた
+  // むーみんがある）ときだけ反映する（ポータルの groupByMonth と同じ）
+  const mark = {};
+  muuminList.forEach(m => {
+    const k = portalMuuminMark(m.title);
+    if (k !== '○' || titles[m.date] || m.date in mark) mark[m.date] = k;
+  });
+  const rest = new Set();
+  for (let d = new Date(from.getFullYear(), from.getMonth(), from.getDate()); d < end; d.setDate(d.getDate() + 1)) {
+    const day = toDateStr(d);
+    if (portalRestDay(day, titles[day] || [], mark[day])) rest.add(day);
+  }
+  return rest;
 }
 
 // 並び順の保存先（通常・スイミング共通の1本）
@@ -1207,7 +1293,7 @@ function setEmployeeAttr(name, attr) {
   markSettingsChanged();
 }
 
-/* 従業員設定（並び順・資格／バス・手書き用の人）の書き出しと読み込み。
+/* 従業員設定（並び順・資格／バス・サンプルの人）の書き出しと読み込み。
    氏名はソースに置かないので、別の端末へはこのJSONファイルで持っていく。
    勤怠データのバックアップ（{名前:{日付:[…]}}）とは別物。 */
 const SETTINGS_FILE_TYPE = 'tc5-employee-settings';
@@ -1217,7 +1303,6 @@ function exportEmployeeSettings() {
     type: SETTINGS_FILE_TYPE,
     exportOrder: loadExportOrder(),
     employeeAttrs: loadEmployeeAttrs(),
-    alwaysExportEmpty: loadAlwaysExportEmpty(),
     samplePeople: loadSamplePeople()
   };
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
@@ -1249,9 +1334,6 @@ function importEmployeeSettings(file, done) {
         }
         localStorage.setItem(EMP_ATTR_KEY, JSON.stringify(attrs));
         markSettingsChanged();
-      }
-      if (Array.isArray(d.alwaysExportEmpty)) {
-        saveAlwaysExportEmpty(d.alwaysExportEmpty.map(n => String(n).trim()).filter(Boolean));
       }
       if (Array.isArray(d.samplePeople)) {
         saveSamplePeople(d.samplePeople.map(n => String(n).trim()).filter(Boolean));
@@ -1300,8 +1382,6 @@ function exportCandidateNames(scope) {
   const modes = scope === 'both' ? ['normal', 'swim'] : [getMode()];
   const names = new Set();
   modes.forEach(m => Object.keys(loadDataFor(m)).forEach(n => names.add(n)));
-  // データが無くても出力する人（手書き用）は常にリストに載せる
-  if (modes.includes('normal')) loadAlwaysExportEmpty().forEach(n => names.add(n));
   // サンプルを付けるときは、サンプルの人も載せる（通常のみ）
   if (modes.includes('normal') && sampleEnabled()) loadSamplePeople().forEach(n => names.add(n));
   return orderedUserNames([...names]);
@@ -1343,17 +1423,20 @@ function showExportDialog() {
           </div>
         </div>
         <div class="form-group">
-          <label>データが無くても印刷する人（手書き用の空の表・カンマ区切り・自動保存）</label>
-          <input type="text" id="alwaysEmptyInput" placeholder="例: 山田, 佐藤" value="${esc(loadAlwaysExportEmpty().join(', '))}">
-        </div>
-        <div class="form-group">
           <label>サンプルを作る人（通常・カンマ区切り・自動保存）</label>
           <input type="text" id="samplePeopleInput" placeholder="例: 山田" value="${esc(loadSamplePeople().join(', '))}">
           <label class="checkbox-label" style="margin-top:8px;"><input type="checkbox" id="sampleOn" ${sampleEnabled() ? 'checked' : ''}> サンプルを付けて印刷する</label>
-          <p class="hint">選んだ期間の平日（土日祝を除く）に、午前10時〜14時ごろ・午後15時〜19時ごろの記録をその場で作ります（1日8時間以内）。勤怠データには保存しません。</p>
+          <details class="cal-settings">
+            <summary>休みの日：はくつるポータルの予定表 <span id="calStatus"></span></summary>
+            <input type="password" id="calApiKey" placeholder="APIキー（GOOGLE_CALENDAR_API_KEY）" autocomplete="off">
+            <input type="text" id="calId" placeholder="行事カレンダーID（GOOGLE_CALENDAR_ID）" autocomplete="off">
+            <input type="text" id="calMuuminId" placeholder="むーみんカレンダーID（GOOGLE_MUUMIN_CALENDAR_ID）" autocomplete="off">
+            <button type="button" class="btn btn-secondary" id="calTestBtn">読めるか確かめる</button>
+            <p class="hint" id="calTestResult"></p>
+          </details>
         </div>
         <div class="form-group">
-          <label>並び順・資格／バス・手書き用・サンプル・時給の設定は、保存先フォルダにも自動で保存されます（フォルダを選んでいれば、ほかのPCでも同じ設定になります）。ファイルで受け渡すときはこちら</label>
+          <label>並び順・資格／バス・サンプル・予定表・時給の設定は、保存先フォルダにも自動で保存されます（フォルダを選んでいれば、ほかのPCでも同じ設定になります）。ファイルで受け渡すときはこちら</label>
           <div style="display:flex; gap:8px;">
             <button type="button" class="btn btn-secondary" id="exportSettingsBtn">設定を書き出す</button>
             <button type="button" class="btn btn-secondary" id="importSettingsBtn">設定を読み込む</button>
@@ -1442,13 +1525,6 @@ function showExportDialog() {
     renderUserList(this.value);
   });
 
-  // 手書き用の人（カンマ区切り）。変えたら保存して従業員リストを作り直す
-  dialog.querySelector('#alwaysEmptyInput').addEventListener('change', function () {
-    saveAlwaysExportEmpty(this.value.split(/[,、，]/).map(s => s.trim()).filter(Boolean));
-    this.value = loadAlwaysExportEmpty().join(', ');
-    renderUserList(dialog.querySelector('#exportScope').value);
-  });
-
   // サンプルを作る人・付けるかどうか。変えたら保存して従業員リストを作り直す
   dialog.querySelector('#samplePeopleInput').addEventListener('change', function () {
     saveSamplePeople(this.value.split(/[,、，]/).map(s => s.trim()).filter(Boolean));
@@ -1460,6 +1536,40 @@ function showExportDialog() {
     renderUserList(dialog.querySelector('#exportScope').value);
   });
 
+  // 予定表（Googleカレンダー）の設定。変えたら保存する
+  const calInputs = { apiKey: '#calApiKey', calendarId: '#calId', muuminId: '#calMuuminId' };
+  const showCalStatus = () => {
+    const c = loadPortalCalendar();
+    dialog.querySelector('#calStatus').textContent = c.apiKey && c.calendarId ? '（設定済み）' : '（未設定：土日と国民の祝日で判断）';
+  };
+  const cal = loadPortalCalendar();
+  for (const [k, sel] of Object.entries(calInputs)) {
+    const input = dialog.querySelector(sel);
+    input.value = cal[k];
+    input.addEventListener('change', () => {
+      const c = loadPortalCalendar();
+      c[k] = input.value.trim();
+      savePortalCalendar(c);
+      showCalStatus();
+    });
+  }
+  showCalStatus();
+  // 最新の月の休みの日を読んでみせる
+  dialog.querySelector('#calTestBtn').addEventListener('click', async () => {
+    const out = dialog.querySelector('#calTestResult');
+    out.textContent = '読んでいます…';
+    const { start, end } = getLatestDataPeriod();
+    try {
+      const rest = await loadPortalRestDays(start, end);
+      if (!rest) { out.textContent = 'APIキーと行事カレンダーIDを入れてください'; return; }
+      const md = s => `${+s.slice(5, 7)}/${+s.slice(8, 10)}`;
+      const weekdays = [...rest].filter(s => { const g = new Date(`${s}T00:00:00`).getDay(); return g !== 0 && g !== 6; }).sort();
+      out.textContent = `読めました。${md(toDateStr(start))}〜${md(toDateStr(end))} の平日の休み：${weekdays.length ? weekdays.map(md).join('・') : 'なし'}`;
+    } catch (e) {
+      out.textContent = `読めませんでした（${e.message}）`;
+    }
+  });
+
   // 従業員設定の書き出し・読み込み（別の端末へ持っていくため）
   dialog.querySelector('#exportSettingsBtn').addEventListener('click', exportEmployeeSettings);
   dialog.querySelector('#importSettingsBtn').addEventListener('click', () => dialog.querySelector('#importSettingsFile').click());
@@ -1468,7 +1578,6 @@ function showExportDialog() {
     this.value = '';
     if (!file) return;
     importEmployeeSettings(file, () => {
-      dialog.querySelector('#alwaysEmptyInput').value = loadAlwaysExportEmpty().join(', ');
       dialog.querySelector('#samplePeopleInput').value = loadSamplePeople().join(', ');
       renderUserList(dialog.querySelector('#exportScope').value);
     });
@@ -1617,29 +1726,52 @@ function performExport(dialog, closeDialog, action) {
  *  出力する中身（1人1枚の表と、合計まとめ）を組み立てる。印刷とExcelで同じものを使う。
  *  返すもの：{ sheets:[{name, person, mode, aoa}], summary:{aoa, legendStart, legendLines}|null,
  *            filename（拡張子なし）, minDate, maxDate }。出すものが無ければ null。
+ *  restDays：サンプルを作らない休みの日（予定表から読んだもの）。null なら国民の祝日で判断する
  */
-function buildExportBook(startDate, endDate, exportType, selectedUsers, raiseDate, scope) {
+// サンプルを作る人と期間。サンプルを付けないときは null
+function sampleRange(startDate, endDate, exportType, scope) {
+  const modes = scope === 'both' ? ['normal', 'swim'] : [getMode()];
+  const people = modes.includes('normal') && sampleEnabled() ? loadSamplePeople() : [];
+  if (!people.length) return null;
+  if (exportType !== 'all') return { people, from: startDate, to: endDate };
+  // 「すべてのデータ」のときは、ほかの人の記録がある範囲で作る
+  const days = [];
+  modes.forEach(m => {
+    const data = loadDataFor(m);
+    for (const n in data) if (!people.includes(n)) days.push(...Object.keys(data[n]));
+  });
+  days.sort();
+  if (days.length) return { people, from: new Date(days[0] + 'T00:00:00'), to: new Date(days[days.length - 1] + 'T00:00:00') };
+  const { start, end } = getLatestDataPeriod();
+  return { people, from: start, to: end };
+}
+
+// 印刷・Excelの前に、サンプルを作る期間の休みの日を予定表から読む。
+// 予定表が未設定・読めないときは null（土日と国民の祝日で判断する）
+async function sampleRestDays(startDate, endDate, exportType, selectedUsers, scope) {
+  const sample = sampleRange(startDate, endDate, exportType, scope);
+  if (!sample || !sample.people.some(n => selectedUsers.includes(n))) return null;
+  try {
+    const rest = await loadPortalRestDays(sample.from, sample.to);
+    if (!rest) showToast('予定表が未設定なので、休みの日は土日と国民の祝日で判断しました', 'warning', 5000);
+    return rest;
+  } catch (e) {
+    console.warn('予定表を読めない:', e);
+    showToast(`予定表を読めなかったので、休みの日は土日と国民の祝日で判断しました（${e.message}）`, 'warning', 6000);
+    return null;
+  }
+}
+
+function buildExportBook(startDate, endDate, exportType, selectedUsers, raiseDate, scope, restDays) {
   // scope: 'current'＝今のモードのみ／'both'＝通常＋スイミングを1つにまとめる
   const modesToExport = scope === 'both' ? ['normal', 'swim'] : [getMode()];
   const dataByMode = {};
   modesToExport.forEach(m => { dataByMode[m] = loadDataFor(m); });
 
   // サンプルの人：通常の記録を、この期間の分だけその場で作ったものにする（勤怠データには保存しない）
-  const samplePeople = modesToExport.includes('normal') && sampleEnabled() ? loadSamplePeople() : [];
-  if (samplePeople.length) {
-    let from = startDate, to = endDate;
-    if (exportType === 'all') {
-      // 「すべてのデータ」のときは、ほかの人の記録がある範囲で作る
-      const days = [];
-      modesToExport.forEach(m => {
-        for (const n in dataByMode[m]) if (!samplePeople.includes(n)) days.push(...Object.keys(dataByMode[m][n]));
-      });
-      days.sort();
-      if (days.length) { from = new Date(days[0] + 'T00:00:00'); to = new Date(days[days.length - 1] + 'T00:00:00'); }
-      else ({ start: from, end: to } = getLatestDataPeriod());
-    }
-    samplePeople.forEach(n => { dataByMode.normal[n] = generateSampleCards(n, from, to); });
-  }
+  const sample = sampleRange(startDate, endDate, exportType, scope);
+  const samplePeople = sample ? sample.people : [];
+  samplePeople.forEach(n => { dataByMode.normal[n] = generateSampleCards(n, sample.from, sample.to, restDays); });
 
   const sheets = [];
   let summary = null;
@@ -1666,12 +1798,10 @@ function buildExportBook(startDate, endDate, exportType, selectedUsers, raiseDat
 
   // 出力シート（1人×1モード＝1シート）をダイアログの表示順に組み立てる。
   // 両モードにデータがある人は 通常→スイミング の順で並べ、シート名に（通常）（スイミング）を付ける
-  const alwaysEmpty = loadAlwaysExportEmpty();
   const tasks = [];
   for (const name of selectedUsers) {
     const targets = modesToExport.filter(m =>
-      (dataByMode[m][name] && Object.keys(dataByMode[m][name]).length > 0) ||
-      (m === 'normal' && alwaysEmpty.includes(name)));
+      dataByMode[m][name] && Object.keys(dataByMode[m][name]).length > 0);
     const dual = targets.length > 1;
     for (const m of targets) tasks.push({ name, mode: m, dual });
   }
@@ -1687,8 +1817,6 @@ function buildExportBook(startDate, endDate, exportType, selectedUsers, raiseDat
   for (const { name, mode, dual } of tasks) {
     const cards = dataByMode[mode][name] || {};
     const workType = MODES[mode].label;
-    // データが無くてもシートを出す人（手書き用）
-    const forceEmpty = mode === 'normal' && alwaysEmpty.includes(name);
 
     let sheetName = name;
     if (dual) {
@@ -1698,9 +1826,10 @@ function buildExportBook(startDate, endDate, exportType, selectedUsers, raiseDat
       sheetName = name + monthNames[startDate.getMonth()];
     }
 
+    // サンプルの人は早朝・夕方を付けず、全部を通常として数える
     const isSample = mode === 'normal' && samplePeople.includes(name);
     const sheetData = [];
-    sheetData.push([`名前: ${name} (${workType}${isSample ? '・サンプル' : ''})`]);
+    sheetData.push([`名前: ${name} (${workType})`]);
     if (!raiseDate) {
       sheetData.push(["日付","出勤時間","退勤時間","合計時間","早朝勤務","夕方勤務","朝夕合計","通常合計","勤務種別"]);
     }
@@ -1724,8 +1853,8 @@ function buildExportBook(startDate, endDate, exportType, selectedUsers, raiseDat
           let totalHours = 0, earlyMorning = 0, evening = 0;
           if (card.checkOut) {
             totalHours = calculateTimeDifference(card.checkIn, card.checkOut);
-            earlyMorning = calculateEarlyMorningTime(card.checkIn, card.checkOut);
-            evening = calculateEveningTime(card.checkIn, card.checkOut);
+            earlyMorning = isSample ? 0 : calculateEarlyMorningTime(card.checkIn, card.checkOut);
+            evening = isSample ? 0 : calculateEveningTime(card.checkIn, card.checkOut);
           }
           periodData.push({
             date,
@@ -1789,7 +1918,6 @@ function buildExportBook(startDate, endDate, exportType, selectedUsers, raiseDat
     if (hasAnyData) {
       let row = summaryByName[name];
       if (!row) { row = summaryByName[name] = { name, a: 0, b: 0, c: 0, d: 0, e: 0 }; summaryOrder.push(name); }
-      if (isSample) row.name = `${name}（サンプル）`;
       if (mode === 'swim') {
         row.e += gTotal;                       // スイミングは全時間 → E
       } else {
@@ -1809,13 +1937,7 @@ function buildExportBook(startDate, endDate, exportType, selectedUsers, raiseDat
       }
     }
 
-    if (!hasAnyData) {
-      if (!forceEmpty) continue;
-      // 手書き用の空シート：昇給分割時は見出し行が未出力なので足しておく
-      if (raiseDate) {
-        sheetData.push(["日付","出勤時間","退勤時間","合計時間","早朝勤務","夕方勤務","朝夕合計","通常合計","勤務種別"]);
-      }
-    }
+    if (!hasAnyData) continue;
     sheets.push({ name: sheetName.slice(0, 31), person: name, mode, aoa: sheetData });
     sheetCount++;
   }
@@ -1884,8 +2006,9 @@ function buildExportBook(startDate, endDate, exportType, selectedUsers, raiseDat
 }
 
 // 予備：Excelで出す（中身は buildExportBook で組み立てたもの）
-function exportToExcel(startDate, endDate, exportType, selectedUsers, raiseDate, scope) {
-  const book = buildExportBook(startDate, endDate, exportType, selectedUsers, raiseDate, scope);
+async function exportToExcel(startDate, endDate, exportType, selectedUsers, raiseDate, scope) {
+  const restDays = await sampleRestDays(startDate, endDate, exportType, selectedUsers, scope);
+  const book = buildExportBook(startDate, endDate, exportType, selectedUsers, raiseDate, scope, restDays);
   if (!book) {
     showToast('選択した期間にデータがありません', 'warning');
     return;
@@ -1960,7 +2083,11 @@ thead th { background: #e8e8e8; font-weight: 600; }
 td.num { text-align: right; font-variant-numeric: tabular-nums; }
 td.paid { font-weight: 700; }
 tr.total td { font-weight: 700; background: #f2f2f2; border-top: 2px solid #000; }
-tr.blank td { height: 7mm; }
+/* 1枚に入らないページ（fitPrintPages が付ける）：行の上下を詰める */
+.page.compact th, .page.compact td { padding: 0.3mm 1.2mm; line-height: 1.2; }
+.page.compact h2 { margin: 2mm 0 1mm; }
+/* 画面で高さを測るとき、紙と同じ幅で並ぶように（紙の印刷できる幅 = 210mm − 左右12mm） */
+@media screen { body { width: 186mm; } }
 col.c-date { width: 12%; } col.c-time { width: 11%; }
 .summary th, .summary td { font-size: 10.5pt; padding: 1.8mm 2mm; }
 .summary td:first-child { text-align: left; }
@@ -1990,7 +2117,6 @@ function splitSheetBlocks(aoa) {
 function printSheetHtml(sheet, periodText) {
   const title = String((sheet.aoa[0] || [''])[0] || sheet.name);
   const blocks = splitSheetBlocks(sheet.aoa);
-  const handwriting = blocks.every(b => b.rows.length === 0 && !b.total);
   const cell = (v, i) => {
     const s = v == null ? '' : String(v);
     const cls = i >= 3 && i <= 7 ? ' class="num"' : (i === 8 && s ? ' class="paid"' : '');
@@ -2003,7 +2129,6 @@ function printSheetHtml(sheet, periodText) {
       <thead><tr>${PRINT_HEADER.map(h => `<th>${h}</th>`).join('')}</tr></thead>
       <tbody>
         ${b.rows.map(r => `<tr>${PRINT_HEADER.map((_, i) => cell(r[i], i)).join('')}</tr>`).join('')}
-        ${handwriting ? ('<tr class="blank">' + '<td></td>'.repeat(9) + '</tr>').repeat(25) : ''}
         ${b.total
           // 合計の行は出勤・退勤が空なので、見出し（【昇給前合計】など）を3列ぶん使って1行に収める
           ? `<tr class="total"><td colspan="3">${esc(b.total[0])}</td>${PRINT_HEADER.slice(3).map((_, k) => cell(b.total[k + 3], k + 3)).join('')}</tr>`
@@ -2038,24 +2163,55 @@ function buildPrintHtml(book, periodText) {
     + `<title>勤怠_${esc(book.filename)}</title><style>${PRINT_CSS}</style></head><body>${pages}</body></html>`;
 }
 
-// 印刷する。印刷専用のページを新しいタブに作って、そこから刷る（アプリの画面は刷らない）
-function printTimesheets(startDate, endDate, exportType, selectedUsers, raiseDate, scope) {
-  const book = buildExportBook(startDate, endDate, exportType, selectedUsers, raiseDate, scope);
-  if (!book) { showToast('選択した期間にデータがありません', 'warning'); return; }
+// 1人1枚に収める。紙1枚に入らないページは、まず行の上下を詰め、それでも入らなければ
+// ページ全体を縮める（縮めたぶん幅を広げておくので、表の横幅は紙いっぱいのまま）
+function fitPrintPages(doc) {
+  const probe = doc.createElement('div');
+  // 印刷できる高さ = 297mm − 上下11mm。端数で次のページへこぼれないよう少し余らせる
+  probe.style.cssText = 'position:absolute; visibility:hidden; width:186mm; height:272mm;';
+  doc.body.appendChild(probe);
+  const { width: fullW, height: availH } = probe.getBoundingClientRect();
+  probe.remove();
+  doc.querySelectorAll('.page').forEach(page => {
+    if (page.getBoundingClientRect().height <= availH) return;
+    page.classList.add('compact');
+    // 縮めても罫線は細くならないので、縮めたあとに測り直し、入るまで縮め直す
+    let z = 1;
+    for (let i = 0; i < 8; i++) {
+      const h = page.getBoundingClientRect().height;
+      if (h <= availH) return;
+      z = Math.floor(z * availH / h * 1000) / 1000;
+      page.style.width = `${fullW / z}px`;
+      page.style.zoom = z;
+    }
+  });
+}
+
+// 印刷する。印刷専用のページを新しいタブに作って、そこから刷る（アプリの画面は刷らない）。
+// タブはクリックしてすぐ開く（予定表を読んだあとに開くと、ポップアップとして止められることがあるため）
+async function printTimesheets(startDate, endDate, exportType, selectedUsers, raiseDate, scope) {
+  const w = window.open('', '_blank');
+  if (!w) { showToast('新しいタブを開けませんでした。ポップアップを許可してください', 'warning'); return; }
+  w.document.write('<p style="font:15px sans-serif; padding:24px;">印刷の準備をしています…</p>');
+  w.document.close();
+
+  const restDays = await sampleRestDays(startDate, endDate, exportType, selectedUsers, scope);
+  const book = buildExportBook(startDate, endDate, exportType, selectedUsers, raiseDate, scope, restDays);
+  if (!book) { w.close(); showToast('選択した期間にデータがありません', 'warning'); return; }
   const from = exportType === 'all' ? book.minDate : startDate;
   const to = exportType === 'all' ? book.maxDate : endDate;
   const ymd = d => d ? `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}` : '';
   const periodText = `期間：${ymd(from)}〜${ymd(to)}`;
 
-  const w = window.open('', '_blank');
-  if (!w) { showToast('新しいタブを開けませんでした。ポップアップを許可してください', 'warning'); return; }
+  w.document.open();
   w.document.write(buildPrintHtml(book, periodText));
   w.document.close();
-  w.onload = () => {
+  setTimeout(() => {
+    fitPrintPages(w.document);
     w.focus();
     w.print();
     w.onafterprint = () => w.close();
-  };
+  }, 50);
   showToast(`${book.sheets.length}人ぶんを新しいタブで印刷します`, 'success');
 }
 
@@ -2272,7 +2428,7 @@ function restoreData(file, mode) {
 /*
  *  最初に1回フォルダを選ぶと、ブラウザが覚えておき、以後は変更のたびにそのフォルダへ自動で保存する。
  *    勤怠データ_R8.9-10.json … 締め期間（11日〜翌10日）ごとに1ファイル。通常とスイミングの両方が入る
- *    勤怠データ_設定.json   … 並び順・資格／バス・手書き用・サンプルの人・A〜Eの時給
+ *    勤怠データ_設定.json   … 並び順・資格／バス・A〜Eの時給・サンプルの人・予定表（Googleカレンダー）の設定
  *  このPCの中（localStorage）が作業用、フォルダが保管用。開いたときに両方を突き合わせ、
  *  どちらか一方にしか無い記録があれば、黙って消さずにどうするか聞く。
  */
@@ -2362,8 +2518,7 @@ function buildDataFiles() {
 function settingsCore() {
   return JSON.stringify({ format: 'tc5-settings', version: 1,
     exportOrder: loadExportOrder(), employeeAttrs: loadEmployeeAttrs(),
-    alwaysExportEmpty: loadAlwaysExportEmpty(), rankWages: loadWages(),
-    samplePeople: loadSamplePeople() });
+    rankWages: loadWages(), samplePeople: loadSamplePeople(), portalCalendar: loadPortalCalendar() });
 }
 
 // 設定を変えたとき：変えた時刻を覚えて、フォルダへの保存を予約する
@@ -2432,8 +2587,8 @@ async function readFolderFiles() {
         out.settings = obj;
         out.files[name] = { core: JSON.stringify({ format: 'tc5-settings', version: 1,
           exportOrder: obj.exportOrder || [], employeeAttrs: obj.employeeAttrs || {},
-          alwaysExportEmpty: obj.alwaysExportEmpty || [], rankWages: obj.rankWages || {},
-          samplePeople: obj.samplePeople || [] }) };
+          rankWages: obj.rankWages || {}, samplePeople: obj.samplePeople || [],
+          portalCalendar: obj.portalCalendar || { apiKey: '', calendarId: '', muuminId: '' } }) };
       }
       continue;
     }
@@ -2482,9 +2637,9 @@ function applyBothModes(both) {
 function applySettingsFromFolder(s) {
   if (Array.isArray(s.exportOrder)) localStorage.setItem(ORDER_KEY, JSON.stringify(s.exportOrder));
   if (s.employeeAttrs && typeof s.employeeAttrs === 'object') localStorage.setItem(EMP_ATTR_KEY, JSON.stringify(s.employeeAttrs));
-  if (Array.isArray(s.alwaysExportEmpty)) localStorage.setItem(ALWAYS_EMPTY_KEY, JSON.stringify(s.alwaysExportEmpty));
   if (s.rankWages && typeof s.rankWages === 'object') localStorage.setItem(WAGE_KEY, JSON.stringify(s.rankWages));
   if (Array.isArray(s.samplePeople)) localStorage.setItem(SAMPLE_KEY, JSON.stringify(s.samplePeople));
+  if (s.portalCalendar && typeof s.portalCalendar === 'object') localStorage.setItem(PORTAL_CAL_KEY, JSON.stringify(s.portalCalendar));
   if (s.savedAt) localStorage.setItem(SETTINGS_TIME_KEY, s.savedAt);
 }
 
