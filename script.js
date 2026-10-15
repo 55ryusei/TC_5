@@ -1764,8 +1764,143 @@ function exportToExcel(startDate, endDate, exportType, selectedUsers, raiseDate,
   else if (getMode() === 'swim') filename += '_SW';
   filename += '.xlsx';
 
-  XLSX.writeFile(workbook, filename);
+  writeWorkbookFile(workbook, filename);
   showToast('Excelファイルを出力しました', 'success');
+}
+
+/*
+ *  Excelファイルの基準フォントを「ＭＳ Ｐゴシック」にして書き出す。
+ *
+ *  SheetJS（無償版）は基準フォントを Calibri で書き出す。日本語版Excelはどちらでも
+ *  同じに見せるが、Googleスプレッドシートは書いてある名前のまま列幅を計算するので、
+ *  Excelで一度保存し直したファイル（ＭＳ Ｐゴシックになる）と幅が変わってしまう。
+ *  最初から名前をＭＳ Ｐゴシックにしておけば、保存し直したものと同じ指定になる
+ *  （ほかの指定は同じなので、名前だけ差し替える）。
+ *
+ *  ※ SheetJS の zip 組み立て（XLSX.CFB.write）はブラウザで中身を落とすので使わない
+ *    （v5.0.2 で Excel が開けなくなった原因）。SheetJS は部品を圧縮せずに入れるので、
+ *    zip の読み書きはここで自前でやる。少しでもおかしければ今までどおり保存する。
+ */
+function writeWorkbookFile(workbook, filename) {
+  let bytes;
+  try {
+    bytes = buildXlsxBytes(workbook);
+  } catch (e) {
+    console.warn('フォントを差し替えずに保存します:', e);
+    XLSX.writeFile(workbook, filename);
+    return;
+  }
+  const blob = new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+// 基準フォントを差し替えた xlsx を、バイト列（Uint8Array）で作る。おかしければ投げる
+function buildXlsxBytes(workbook) {
+  const src = new Uint8Array(XLSX.write(workbook, { bookType: 'xlsx', type: 'array' }));
+  const entries = readStoredZip(src);
+  const styles = entries.find(e => e.name === 'xl/styles.xml');
+  if (!styles) throw new Error('styles.xml が無い');
+  const xml = new TextDecoder('utf-8').decode(styles.data);
+  // 最初の <font>（＝基準フォント）の名前だけを差し替える
+  const fixed = xml.replace(/(<fonts[^>]*>\s*<font>[\s\S]*?)<name val="[^"]*"\/>/, '$1<name val="ＭＳ Ｐゴシック"/>');
+  if (fixed === xml) throw new Error('基準フォントの名前が見つからない');
+  styles.data = new TextEncoder().encode(fixed);
+  const out = writeStoredZip(entries);
+
+  // できたものを読み直して、部品がそろっていて中身が入っていることを確かめる
+  const check = readStoredZip(out);
+  if (check.length !== entries.length) throw new Error('部品の数が合わない');
+  for (let i = 0; i < entries.length; i++) {
+    if (check[i].name !== entries[i].name || check[i].data.length !== entries[i].data.length) {
+      throw new Error('部品の中身が合わない: ' + entries[i].name);
+    }
+  }
+  if (!new TextDecoder('utf-8').decode(check.find(e => e.name === 'xl/styles.xml').data).includes('ＭＳ Ｐゴシック')) {
+    throw new Error('差し替えたフォントが入っていない');
+  }
+  return out;
+}
+
+// 圧縮なし（STORE）の zip を読む。部品名と中身の配列を返す。圧縮された部品があれば投げる
+function readStoredZip(u8) {
+  const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
+  let eocd = -1;                                          // 目次の終わり（後ろから探す）
+  for (let i = u8.length - 22; i >= Math.max(0, u8.length - 22 - 65535); i--) {
+    if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+  }
+  if (eocd < 0) throw new Error('zip の目次が見つからない');
+  const count = dv.getUint16(eocd + 10, true);
+  let p = dv.getUint32(eocd + 16, true);
+  const dec = new TextDecoder('utf-8');
+  const out = [];
+  for (let k = 0; k < count; k++) {
+    if (dv.getUint32(p, true) !== 0x02014b50) throw new Error('zip の目次が壊れている');
+    const method = dv.getUint16(p + 10, true);
+    const csize = dv.getUint32(p + 20, true), usize = dv.getUint32(p + 24, true);
+    const nlen = dv.getUint16(p + 28, true), xlen = dv.getUint16(p + 30, true), clen = dv.getUint16(p + 32, true);
+    const at = dv.getUint32(p + 42, true);
+    const name = dec.decode(u8.subarray(p + 46, p + 46 + nlen));
+    if (method !== 0 || csize !== usize) throw new Error('圧縮された部品がある: ' + name);
+    if (dv.getUint32(at, true) !== 0x04034b50) throw new Error('部品の頭が壊れている: ' + name);
+    const start = at + 30 + dv.getUint16(at + 26, true) + dv.getUint16(at + 28, true);
+    out.push({ name, data: u8.slice(start, start + csize) });
+    p += 46 + nlen + xlen + clen;
+  }
+  return out;
+}
+
+// 圧縮なし（STORE）の zip を作る
+function writeStoredZip(entries) {
+  const enc = new TextEncoder();
+  const now = new Date();
+  const dosTime = (now.getHours() << 11) | (now.getMinutes() << 5) | (now.getSeconds() >> 1);
+  const dosDate = ((now.getFullYear() - 1980) << 9) | ((now.getMonth() + 1) << 5) | now.getDate();
+  const locals = [], centrals = [];
+  let offset = 0;
+  for (const e of entries) {
+    const name = enc.encode(e.name), size = e.data.length, crc = crc32(e.data);
+    const lh = new Uint8Array(30 + name.length), lv = new DataView(lh.buffer);
+    lv.setUint32(0, 0x04034b50, true); lv.setUint16(4, 20, true); lv.setUint16(6, 0x0800, true);
+    lv.setUint16(8, 0, true); lv.setUint16(10, dosTime, true); lv.setUint16(12, dosDate, true);
+    lv.setUint32(14, crc, true); lv.setUint32(18, size, true); lv.setUint32(22, size, true);
+    lv.setUint16(26, name.length, true); lv.setUint16(28, 0, true); lh.set(name, 30);
+    const ch = new Uint8Array(46 + name.length), cv = new DataView(ch.buffer);
+    cv.setUint32(0, 0x02014b50, true); cv.setUint16(4, 20, true); cv.setUint16(6, 20, true);
+    cv.setUint16(8, 0x0800, true); cv.setUint16(10, 0, true); cv.setUint16(12, dosTime, true);
+    cv.setUint16(14, dosDate, true); cv.setUint32(16, crc, true); cv.setUint32(20, size, true);
+    cv.setUint32(24, size, true); cv.setUint16(28, name.length, true); cv.setUint32(42, offset, true);
+    ch.set(name, 46);
+    locals.push(lh, e.data); centrals.push(ch);
+    offset += lh.length + size;
+  }
+  const cdSize = centrals.reduce((s, c) => s + c.length, 0);
+  const end = new Uint8Array(22), ev = new DataView(end.buffer);
+  ev.setUint32(0, 0x06054b50, true); ev.setUint16(8, entries.length, true);
+  ev.setUint16(10, entries.length, true); ev.setUint32(12, cdSize, true); ev.setUint32(16, offset, true);
+  const out = new Uint8Array(offset + cdSize + 22);
+  let p = 0;
+  for (const part of [...locals, ...centrals, end]) { out.set(part, p); p += part.length; }
+  return out;
+}
+
+// zip の部品ごとの検査値（CRC-32）
+let CRC32_TABLE = null;
+function crc32(u8) {
+  if (!CRC32_TABLE) {
+    CRC32_TABLE = new Uint32Array(256);
+    for (let n = 0; n < 256; n++) {
+      let c = n;
+      for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+      CRC32_TABLE[n] = c >>> 0;
+    }
+  }
+  let crc = 0xFFFFFFFF;
+  for (let i = 0; i < u8.length; i++) crc = CRC32_TABLE[(crc ^ u8[i]) & 0xFF] ^ (crc >>> 8);
+  return (crc ^ 0xFFFFFFFF) >>> 0;
 }
 
 /* ============ 11. バックアップ・リストア ============ */
