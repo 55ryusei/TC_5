@@ -413,25 +413,114 @@ function renderCloudSummary() {
   box.innerHTML = html;
 }
 
-// クラウド → ローカルへ取込（重複は除外）
+/*
+ *  その期間のローカルの記録を、クラウドの記録で置き換える（他の期間には触らない）。
+ *  有給は残す。有給はPC（TC5・有給管理ツール）で入れるものでクラウドには無いので、
+ *  消すと戻ってこないため。
+ */
+function overwritePeriod(local, incoming, period) {
+  const out = {};
+  let removed = 0, keptPaid = 0;
+  for (const name in local) {
+    for (const d in local[name]) {
+      const recs = Array.isArray(local[name][d]) ? local[name][d] : [];
+      if (periodKeyOf(d) !== period) {
+        (out[name] = out[name] || {})[d] = recs;
+        continue;
+      }
+      const paid = recs.filter(r => r && r.isPaidLeave);
+      removed += recs.length - paid.length;
+      keptPaid += paid.length;
+      if (paid.length) (out[name] = out[name] || {})[d] = paid;
+    }
+  }
+  const { merged, added } = mergeTimeCards(out, incoming);
+  return { data: merged, removed, keptPaid, added };
+}
+
+// クラウドの記録数を数える
+function countRecords(data) {
+  let n = 0;
+  for (const name in data) for (const d in data[name]) n += (data[name][d] || []).length;
+  return n;
+}
+
+// 統合か上書きかを選んでもらう。'merge' / 'overwrite' / null（やめる）
+function chooseCloudImportMode(message) {
+  return new Promise(resolve => {
+    const dialog = document.createElement('div');
+    dialog.className = 'ios-dialog';
+    dialog.innerHTML = `
+      <div class="ios-dialog-content">
+        <div class="ios-dialog-header">
+          <div class="ios-dialog-title">クラウドデータ取込</div>
+          <div class="ios-dialog-message" style="white-space:pre-line;">${esc(message)}</div>
+        </div>
+        <div class="ios-dialog-buttons" style="flex-direction: column;">
+          <button class="ios-dialog-button" data-act="merge" style="border-left:none;border-bottom:1px solid var(--border);">統合（今の記録に足す・同じものは除外）</button>
+          <!-- primary は赤（消す操作の色）。ファイルのリストアと同じく上書きに付ける -->
+          <button class="ios-dialog-button primary" data-act="overwrite" style="border-left:none;border-bottom:1px solid var(--border);">上書き（この期間をクラウドの内容に置き換え）</button>
+          <button class="ios-dialog-button" data-act="cancel" style="border-left:none;">キャンセル</button>
+        </div>
+      </div>`;
+    document.body.appendChild(dialog);
+    const close = act => {
+      dialog.style.opacity = '0';
+      setTimeout(() => dialog.remove(), 250);
+      resolve(act === 'merge' || act === 'overwrite' ? act : null);
+    };
+    dialog.addEventListener('click', e => {
+      if (e.target === dialog) { close(null); return; }
+      const act = e.target.dataset && e.target.dataset.act;
+      if (act) close(act);
+    });
+  });
+}
+
+// クラウド → ローカルへ取込。統合（重複は除外）か、その期間の上書きかを選ぶ
 async function cloudImport() {
   if (!cloudCurrent) { showToast('クラウドデータが読み込まれていません', 'warning'); return; }
   const incoming = cloudDataForPeriod();
   if (Object.keys(incoming).length === 0) { showToast('この期間のデータがありません', 'warning'); return; }
 
   const period = document.getElementById('cloudPeriodSel').value;
+  const label = `【${modeCfg().label}】${periodLabelOf(period)}`;
+  // 上書きしたら何が消えて何が残るかを、選ぶ前に見せる
+  const preview = overwritePeriod(loadData(), incoming, period);
+  const act = await chooseCloudImportMode(
+    `${label} のクラウドの記録 ${countRecords(incoming)}件 を取り込みます。\n\n`
+    + '統合：今の記録はそのまま。クラウドにだけある記録を足します。\n'
+    + `上書き：この期間の今の記録 ${preview.removed}件 を消して、クラウドの記録に置き換えます。`
+    + `${preview.keptPaid ? `有給 ${preview.keptPaid}件 は消さずに残します。` : ''}`
+    + 'ほかの期間は変わりません。'
+  );
+  if (!act) return;
+
+  if (act === 'merge') {
+    const { merged, added } = mergeTimeCards(loadData(), incoming);
+    saveData(merged);
+    refreshNameList();
+    displayTimeCards();
+    showToast(added > 0 ? `${added}件の記録を取り込みました` : '新しい記録はありませんでした（すべて取込済み）', 'success');
+    return;
+  }
+
+  // 上書きは元に戻せないので、もう一度だけ確かめる
   const ok = await showConfirmDialog(
-    'クラウドデータ取込',
-    `【${modeCfg().label}】${periodLabelOf(period)} のデータをローカルに統合します。\n既にある記録と同じものは追加されません。`,
-    '取り込む'
+    '上書きの確認',
+    `${label} の今の記録 ${preview.removed}件 を消して、クラウドの内容に置き換えます。\n`
+    + '手で直した時刻もクラウドの時刻に戻ります。元に戻せません。'
+    + `${preview.keptPaid ? `\n（有給 ${preview.keptPaid}件 は残します）` : ''}`,
+    '上書きする'
   );
   if (!ok) return;
 
-  const { merged, added } = mergeTimeCards(loadData(), incoming);
-  saveData(merged);
+  const result = overwritePeriod(loadData(), incoming, period);
+  saveData(result.data);
   refreshNameList();
   displayTimeCards();
-  showToast(added > 0 ? `${added}件の記録を取り込みました` : '新しい記録はありませんでした（すべて取込済み）', 'success');
+  showToast(`${periodLabelOf(period)} をクラウドの内容に置き換えました（${result.added}件`
+    + `${result.keptPaid ? `・有給${result.keptPaid}件はそのまま` : ''}）`, 'success');
 }
 
 // 元データの月次ローカル保存
@@ -1675,8 +1764,49 @@ function exportToExcel(startDate, endDate, exportType, selectedUsers, raiseDate,
   else if (getMode() === 'swim') filename += '_SW';
   filename += '.xlsx';
 
-  XLSX.writeFile(workbook, filename);
+  writeWorkbookFile(workbook, filename);
   showToast('Excelファイルを出力しました', 'success');
+}
+
+/*
+ *  Excelファイルを書き出す。基準フォントを「ＭＳ Ｐゴシック」にしてから保存する。
+ *
+ *  SheetJS（無償版）は基準フォントを Calibri で書き出す。日本語版Excelで開くぶんには
+ *  ＭＳ Ｐゴシックに読み替えて表示されるので違いは出ないが、Googleスプレッドシートは
+ *  書いてあるフォントのまま列幅を計算するため、Excelで一度保存し直したファイル
+ *  （＝ＭＳ Ｐゴシックが書かれる）と列幅が変わってしまう。
+ *  最初からＭＳ Ｐゴシックで書いておけば、保存し直したかどうかに関係なく同じ幅になる。
+ *
+ *  無償版は書式を指定できないので、出来上がったファイルの中の styles.xml を直接書き換える。
+ *  セルには書式を付けていないので、書き換えるのは基準フォント1か所だけでよい。
+ *  うまくいかなかったときは、今までどおりそのまま保存する。
+ */
+function writeWorkbookFile(workbook, filename) {
+  try {
+    const data = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
+    const zip = XLSX.CFB.read(new Uint8Array(data), { type: 'array' });
+    const styles = XLSX.CFB.find(zip, '/xl/styles.xml');
+    if (!styles) throw new Error('styles.xml が見つからない');
+    const xml = new TextDecoder('utf-8').decode(styles.content);
+    // 基準フォント（最初の font）だけを書き換える。scheme="minor" はテーマのフォントを
+    // 使えという意味で名前より優先されてしまうので外す
+    const fixed = xml.replace(/(<fonts[^>]*>\s*<font>)([\s\S]*?)(<\/font>)/, (all, head, body, tail) =>
+      head + body.replace(/<name val="[^"]*"\/>/, '<name val="ＭＳ Ｐゴシック"/>')
+                 .replace(/<scheme val="minor"\/>/, '') + tail);
+    if (fixed === xml) throw new Error('基準フォントの書き換え先が見つからない');
+    styles.content = new TextEncoder().encode(fixed);
+    styles.size = styles.content.length;
+    const out = XLSX.CFB.write(zip, { fileType: 'zip', type: 'array' });
+    const blob = new Blob([out], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (e) {
+    console.warn('フォントを差し替えずに保存します:', e);
+    XLSX.writeFile(workbook, filename);
+  }
 }
 
 /* ============ 11. バックアップ・リストア ============ */
