@@ -698,3 +698,7 @@ input:focus, select:focus { border-color: var(--accent); }
 /* 印刷ダイアログの下：予備のExcel出力 */
 .export-alt { text-align: center; padding: 8px 0 12px; border-top: 1px solid var(--border); }
 .export-alt .btn-link { font-size: 12px; }
+
+/* 印刷画面：サンプルの人の目印 */
+.sample-tag { display: inline-block; margin-left: 4px; padding: 0 6px; border-radius: 8px;
+  font-size: 11px; line-height: 18px; background: #fef3c7; color: #92400e; vertical-align: middle; }

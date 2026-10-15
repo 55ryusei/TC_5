@@ -1077,6 +1077,92 @@ function saveAlwaysExportEmpty(names) {
   markSettingsChanged();
 }
 
+// 印刷のときにサンプルを作る人（通常）。氏名はソースに書かず、印刷画面で入力して保存する。
+// 勤怠データには保存しない。印刷・Excelのたびに、選んだ期間の分をその場で作る。
+const SAMPLE_KEY = 'samplePeople';
+const SAMPLE_ON_KEY = 'sampleEnabled';      // 「サンプルを付ける」のON/OFF（このPCだけで覚える）
+
+function loadSamplePeople() {
+  try {
+    const arr = JSON.parse(localStorage.getItem(SAMPLE_KEY) || '[]');
+    return Array.isArray(arr) ? arr.map(n => String(n).trim()).filter(Boolean) : [];
+  } catch { return []; }
+}
+
+function saveSamplePeople(names) {
+  localStorage.setItem(SAMPLE_KEY, JSON.stringify(names));
+  markSettingsChanged();
+}
+
+function sampleEnabled() { return localStorage.getItem(SAMPLE_ON_KEY) !== '0'; }
+
+// 日本の祝日（2020年以降のルール：振替休日・国民の休日を含む）。"YYYY-MM-DD" の Set
+const JP_HOLIDAY_CACHE = {};
+function jpHolidays(year) {
+  if (JP_HOLIDAY_CACHE[year]) return JP_HOLIDAY_CACHE[year];
+  const key = (m, d) => toDateStr(new Date(year, m - 1, d));
+  const nthMonday = (m, n) => 1 + ((8 - new Date(year, m - 1, 1).getDay()) % 7) + (n - 1) * 7;
+  const t = year - 1980, leap = Math.floor(t / 4);
+  const base = [
+    key(1, 1), key(1, nthMonday(1, 2)), key(2, 11), key(2, 23),
+    key(3, Math.floor(20.8431 + 0.242194 * t - leap)),            // 春分の日
+    key(4, 29), key(5, 3), key(5, 4), key(5, 5),
+    key(7, nthMonday(7, 3)), key(8, 11), key(9, nthMonday(9, 3)),
+    key(9, Math.floor(23.2488 + 0.242194 * t - leap)),            // 秋分の日
+    key(10, nthMonday(10, 2)), key(11, 3), key(11, 23)
+  ];
+  const set = new Set(base);
+  const shift = (s, n) => { const d = new Date(s + 'T00:00:00'); d.setDate(d.getDate() + n); return toDateStr(d); };
+  // 国民の休日：祝日にはさまれた日（9月の敬老の日と秋分の日の間など）
+  for (const s of base) {
+    const mid = shift(s, 1);
+    if (!set.has(mid) && set.has(shift(s, 2)) && new Date(mid + 'T00:00:00').getDay() !== 0) set.add(mid);
+  }
+  // 振替休日：祝日が日曜なら、その後の祝日でない最初の日
+  for (const s of base) {
+    if (new Date(s + 'T00:00:00').getDay() !== 0) continue;
+    let d = shift(s, 1);
+    while (set.has(d)) d = shift(d, 1);
+    set.add(d);
+  }
+  return (JP_HOLIDAY_CACHE[year] = set);
+}
+
+// 名前と日付から決まる乱数（同じ期間を何度印刷しても同じ時刻になる）
+function seededRandom(seed) {
+  let h = 2166136261;
+  for (const ch of seed) { h ^= ch.codePointAt(0); h = Math.imul(h, 16777619); }
+  return () => {
+    h = (h + 0x6D2B79F5) | 0;
+    let t = Math.imul(h ^ (h >>> 15), 1 | h);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// サンプルの勤怠：from〜to の平日（土日祝を除く）に、午前（10時〜14時ごろ）と午後（15時〜19時ごろ）。
+// 1日の合計は 7時間50分〜7時間59分（8時間は超えない）。出退勤の分は乱数で散らす
+function generateSampleCards(name, from, to) {
+  const hm = min => `${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`;
+  const cards = {};
+  const last = toDateStr(to);
+  for (let d = new Date(from.getFullYear(), from.getMonth(), from.getDate()); toDateStr(d) <= last; d.setDate(d.getDate() + 1)) {
+    const day = toDateStr(d);
+    if (d.getDay() === 0 || d.getDay() === 6 || jpHolidays(d.getFullYear()).has(day)) continue;
+    const r = seededRandom(`${name}|${day}`);
+    const pick = (lo, hi) => lo + Math.floor(r() * (hi - lo + 1));
+    const in1 = 600 + pick(-10, 10);            // 9:50〜10:10
+    const len1 = 240 + pick(-8, 5);             // 3時間52分〜4時間5分
+    const in2 = 900 + pick(-10, 10);            // 14:50〜15:10
+    const total = 480 - pick(1, 10);            // 7時間50分〜7時間59分
+    cards[day] = [
+      { checkIn: hm(in1), checkOut: hm(in1 + len1), isPaidLeave: false },
+      { checkIn: hm(in2), checkOut: hm(in2 + total - len1), isPaidLeave: false }
+    ];
+  }
+  return cards;
+}
+
 // 並び順の保存先（通常・スイミング共通の1本）
 const ORDER_KEY = 'exportOrderUnified';
 
@@ -1131,7 +1217,8 @@ function exportEmployeeSettings() {
     type: SETTINGS_FILE_TYPE,
     exportOrder: loadExportOrder(),
     employeeAttrs: loadEmployeeAttrs(),
-    alwaysExportEmpty: loadAlwaysExportEmpty()
+    alwaysExportEmpty: loadAlwaysExportEmpty(),
+    samplePeople: loadSamplePeople()
   };
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
@@ -1165,6 +1252,9 @@ function importEmployeeSettings(file, done) {
       }
       if (Array.isArray(d.alwaysExportEmpty)) {
         saveAlwaysExportEmpty(d.alwaysExportEmpty.map(n => String(n).trim()).filter(Boolean));
+      }
+      if (Array.isArray(d.samplePeople)) {
+        saveSamplePeople(d.samplePeople.map(n => String(n).trim()).filter(Boolean));
       }
       showToast('従業員設定を読み込みました', 'success');
       if (done) done();
@@ -1212,6 +1302,8 @@ function exportCandidateNames(scope) {
   modes.forEach(m => Object.keys(loadDataFor(m)).forEach(n => names.add(n)));
   // データが無くても出力する人（手書き用）は常にリストに載せる
   if (modes.includes('normal')) loadAlwaysExportEmpty().forEach(n => names.add(n));
+  // サンプルを付けるときは、サンプルの人も載せる（通常のみ）
+  if (modes.includes('normal') && sampleEnabled()) loadSamplePeople().forEach(n => names.add(n));
   return orderedUserNames([...names]);
 }
 
@@ -1255,7 +1347,13 @@ function showExportDialog() {
           <input type="text" id="alwaysEmptyInput" placeholder="例: 山田, 佐藤" value="${esc(loadAlwaysExportEmpty().join(', '))}">
         </div>
         <div class="form-group">
-          <label>並び順・資格／バス・手書き用・時給の設定は、保存先フォルダにも自動で保存されます（フォルダを選んでいれば、ほかのPCでも同じ設定になります）。ファイルで受け渡すときはこちら</label>
+          <label>サンプルを作る人（通常・カンマ区切り・自動保存）</label>
+          <input type="text" id="samplePeopleInput" placeholder="例: 山田" value="${esc(loadSamplePeople().join(', '))}">
+          <label class="checkbox-label" style="margin-top:8px;"><input type="checkbox" id="sampleOn" ${sampleEnabled() ? 'checked' : ''}> サンプルを付けて印刷する</label>
+          <p class="hint">選んだ期間の平日（土日祝を除く）に、午前10時〜14時ごろ・午後15時〜19時ごろの記録をその場で作ります（1日8時間以内）。勤怠データには保存しません。</p>
+        </div>
+        <div class="form-group">
+          <label>並び順・資格／バス・手書き用・サンプル・時給の設定は、保存先フォルダにも自動で保存されます（フォルダを選んでいれば、ほかのPCでも同じ設定になります）。ファイルで受け渡すときはこちら</label>
           <div style="display:flex; gap:8px;">
             <button type="button" class="btn btn-secondary" id="exportSettingsBtn">設定を書き出す</button>
             <button type="button" class="btn btn-secondary" id="importSettingsBtn">設定を読み込む</button>
@@ -1315,12 +1413,12 @@ function showExportDialog() {
   const orderList = dialog.querySelector('#userOrderList');
 
   // 従業員リストの描画（出力対象の切り替えで作り直す）
-  const userRowHtml = n => {
+  const userRowHtml = (n, isSample) => {
     const a = getEmployeeAttr(n);
     return `
     <div class="user-row" data-name="${esc(n)}" draggable="true">
       <span class="drag-handle" title="ドラッグで並べ替え">⠿</span>
-      <label><input type="checkbox" class="userCheckbox" value="${esc(n)}" checked> ${esc(n)}</label>
+      <label><input type="checkbox" class="userCheckbox" value="${esc(n)}" checked> ${esc(n)}${isSample ? ' <span class="sample-tag">サンプル</span>' : ''}</label>
       <span class="emp-attrs" title="合計まとめのA〜E振り分けに使用">
         <label title="資格有"><input type="checkbox" class="attrQualified" ${a.qualified ? 'checked' : ''}> 資格</label>
         <label title="バス添乗"><input type="checkbox" class="attrBus" ${a.bus ? 'checked' : ''}> バス</label>
@@ -1333,9 +1431,10 @@ function showExportDialog() {
   };
 
   const renderUserList = scope => {
+    const samples = (scope === 'both' || getMode() === 'normal') && sampleEnabled() ? loadSamplePeople() : [];
     orderList.innerHTML =
       `<label class="select-all"><input type="checkbox" id="selectAllUsers" checked> すべて選択</label>` +
-      exportCandidateNames(scope).map(userRowHtml).join('');
+      exportCandidateNames(scope).map(n => userRowHtml(n, samples.includes(n))).join('');
   };
   renderUserList('current');
 
@@ -1350,6 +1449,17 @@ function showExportDialog() {
     renderUserList(dialog.querySelector('#exportScope').value);
   });
 
+  // サンプルを作る人・付けるかどうか。変えたら保存して従業員リストを作り直す
+  dialog.querySelector('#samplePeopleInput').addEventListener('change', function () {
+    saveSamplePeople(this.value.split(/[,、，]/).map(s => s.trim()).filter(Boolean));
+    this.value = loadSamplePeople().join(', ');
+    renderUserList(dialog.querySelector('#exportScope').value);
+  });
+  dialog.querySelector('#sampleOn').addEventListener('change', function () {
+    localStorage.setItem(SAMPLE_ON_KEY, this.checked ? '1' : '0');
+    renderUserList(dialog.querySelector('#exportScope').value);
+  });
+
   // 従業員設定の書き出し・読み込み（別の端末へ持っていくため）
   dialog.querySelector('#exportSettingsBtn').addEventListener('click', exportEmployeeSettings);
   dialog.querySelector('#importSettingsBtn').addEventListener('click', () => dialog.querySelector('#importSettingsFile').click());
@@ -1359,6 +1469,7 @@ function showExportDialog() {
     if (!file) return;
     importEmployeeSettings(file, () => {
       dialog.querySelector('#alwaysEmptyInput').value = loadAlwaysExportEmpty().join(', ');
+      dialog.querySelector('#samplePeopleInput').value = loadSamplePeople().join(', ');
       renderUserList(dialog.querySelector('#exportScope').value);
     });
   });
@@ -1512,6 +1623,24 @@ function buildExportBook(startDate, endDate, exportType, selectedUsers, raiseDat
   const modesToExport = scope === 'both' ? ['normal', 'swim'] : [getMode()];
   const dataByMode = {};
   modesToExport.forEach(m => { dataByMode[m] = loadDataFor(m); });
+
+  // サンプルの人：通常の記録を、この期間の分だけその場で作ったものにする（勤怠データには保存しない）
+  const samplePeople = modesToExport.includes('normal') && sampleEnabled() ? loadSamplePeople() : [];
+  if (samplePeople.length) {
+    let from = startDate, to = endDate;
+    if (exportType === 'all') {
+      // 「すべてのデータ」のときは、ほかの人の記録がある範囲で作る
+      const days = [];
+      modesToExport.forEach(m => {
+        for (const n in dataByMode[m]) if (!samplePeople.includes(n)) days.push(...Object.keys(dataByMode[m][n]));
+      });
+      days.sort();
+      if (days.length) { from = new Date(days[0] + 'T00:00:00'); to = new Date(days[days.length - 1] + 'T00:00:00'); }
+      else ({ start: from, end: to } = getLatestDataPeriod());
+    }
+    samplePeople.forEach(n => { dataByMode.normal[n] = generateSampleCards(n, from, to); });
+  }
+
   const sheets = [];
   let summary = null;
   let sheetCount = 0;
@@ -1569,8 +1698,9 @@ function buildExportBook(startDate, endDate, exportType, selectedUsers, raiseDat
       sheetName = name + monthNames[startDate.getMonth()];
     }
 
+    const isSample = mode === 'normal' && samplePeople.includes(name);
     const sheetData = [];
-    sheetData.push([`名前: ${name} (${workType})`]);
+    sheetData.push([`名前: ${name} (${workType}${isSample ? '・サンプル' : ''})`]);
     if (!raiseDate) {
       sheetData.push(["日付","出勤時間","退勤時間","合計時間","早朝勤務","夕方勤務","朝夕合計","通常合計","勤務種別"]);
     }
@@ -1659,6 +1789,7 @@ function buildExportBook(startDate, endDate, exportType, selectedUsers, raiseDat
     if (hasAnyData) {
       let row = summaryByName[name];
       if (!row) { row = summaryByName[name] = { name, a: 0, b: 0, c: 0, d: 0, e: 0 }; summaryOrder.push(name); }
+      if (isSample) row.name = `${name}（サンプル）`;
       if (mode === 'swim') {
         row.e += gTotal;                       // スイミングは全時間 → E
       } else {
@@ -1815,7 +1946,8 @@ const PRINT_CSS = `
 * { box-sizing: border-box; }
 body { margin: 0; color: #000; background: #fff;
   font-family: "Yu Gothic", "YuGothic", "Meiryo", "Hiragino Kaku Gothic ProN", sans-serif; font-size: 10pt; }
-.page { page-break-after: always; break-after: page; }
+/* 表の外枠が印刷できる範囲のちょうど端に乗ると、右の線が切れて消える。左右を1mm内側に寄せる */
+.page { page-break-after: always; break-after: page; padding: 0 1mm; }
 .page:last-child { page-break-after: auto; break-after: auto; }
 .head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 3mm;
   border-bottom: 1.5px solid #000; padding-bottom: 1.5mm; }
@@ -2140,7 +2272,7 @@ function restoreData(file, mode) {
 /*
  *  最初に1回フォルダを選ぶと、ブラウザが覚えておき、以後は変更のたびにそのフォルダへ自動で保存する。
  *    勤怠データ_R8.9-10.json … 締め期間（11日〜翌10日）ごとに1ファイル。通常とスイミングの両方が入る
- *    勤怠データ_設定.json   … 並び順・資格／バス・手書き用・A〜Eの時給
+ *    勤怠データ_設定.json   … 並び順・資格／バス・手書き用・サンプルの人・A〜Eの時給
  *  このPCの中（localStorage）が作業用、フォルダが保管用。開いたときに両方を突き合わせ、
  *  どちらか一方にしか無い記録があれば、黙って消さずにどうするか聞く。
  */
@@ -2230,7 +2362,8 @@ function buildDataFiles() {
 function settingsCore() {
   return JSON.stringify({ format: 'tc5-settings', version: 1,
     exportOrder: loadExportOrder(), employeeAttrs: loadEmployeeAttrs(),
-    alwaysExportEmpty: loadAlwaysExportEmpty(), rankWages: loadWages() });
+    alwaysExportEmpty: loadAlwaysExportEmpty(), rankWages: loadWages(),
+    samplePeople: loadSamplePeople() });
 }
 
 // 設定を変えたとき：変えた時刻を覚えて、フォルダへの保存を予約する
@@ -2299,7 +2432,8 @@ async function readFolderFiles() {
         out.settings = obj;
         out.files[name] = { core: JSON.stringify({ format: 'tc5-settings', version: 1,
           exportOrder: obj.exportOrder || [], employeeAttrs: obj.employeeAttrs || {},
-          alwaysExportEmpty: obj.alwaysExportEmpty || [], rankWages: obj.rankWages || {} }) };
+          alwaysExportEmpty: obj.alwaysExportEmpty || [], rankWages: obj.rankWages || {},
+          samplePeople: obj.samplePeople || [] }) };
       }
       continue;
     }
@@ -2350,6 +2484,7 @@ function applySettingsFromFolder(s) {
   if (s.employeeAttrs && typeof s.employeeAttrs === 'object') localStorage.setItem(EMP_ATTR_KEY, JSON.stringify(s.employeeAttrs));
   if (Array.isArray(s.alwaysExportEmpty)) localStorage.setItem(ALWAYS_EMPTY_KEY, JSON.stringify(s.alwaysExportEmpty));
   if (s.rankWages && typeof s.rankWages === 'object') localStorage.setItem(WAGE_KEY, JSON.stringify(s.rankWages));
+  if (Array.isArray(s.samplePeople)) localStorage.setItem(SAMPLE_KEY, JSON.stringify(s.samplePeople));
   if (s.savedAt) localStorage.setItem(SETTINGS_TIME_KEY, s.savedAt);
 }
 
