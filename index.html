@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>勤怠管理（経理）5.0.0</title>
-  <link rel="stylesheet" href="styles.css?v=5.3.0">
+  <link rel="stylesheet" href="styles.css?v=5.4.0">
 </head>
 <body>
 
@@ -158,6 +158,13 @@
             <button type="button" id="searchClearBtn" class="search-clear" title="検索をクリア">✕</button>
           </div>
         </div>
+        <div class="form-group period-group">
+          <label for="listPeriod">表示する期間</label>
+          <select id="listPeriod"></select>
+          <div id="listCustomRange" class="list-custom hidden">
+            <input type="date" id="listFrom" title="開始日"> 〜 <input type="date" id="listTo" title="終了日">
+          </div>
+        </div>
         <div class="toolbar-buttons">
           <button class="btn btn-sheet" id="fixSheetBtn" title="修正申請スプレッドシートを横に並べて開く">📋 修正申請</button>
           <button class="btn btn-drive" id="driveBtn" title="Excel・JSONの保存先フォルダを横に並べて開く">📁 ドライブ</button>
@@ -192,6 +199,6 @@
   <div class="footer"><span>©</span> 2026 SwiftRaptor</div>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.17.0/xlsx.full.min.js"></script>
-  <script src="script.js?v=5.3.0"></script>
+  <script src="script.js?v=5.4.0"></script>
 </body>
 </html>

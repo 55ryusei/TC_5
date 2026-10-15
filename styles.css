@@ -708,3 +708,8 @@ input:focus, select:focus { border-color: var(--accent); }
 .cal-settings summary { cursor: pointer; color: var(--text-secondary); }
 .cal-settings input { margin-top: 6px; }
 .cal-settings .btn { margin-top: 8px; }
+
+/* 一覧の期間（名前で検索の横） */
+.period-group { flex: 0 0 auto; min-width: 230px; margin-bottom: 0; }
+.list-custom { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
+.list-custom input { width: auto; flex: 1; min-width: 0; }

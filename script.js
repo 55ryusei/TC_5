@@ -880,9 +880,39 @@ function refreshNameList() {
     names.map(n => `<option value="${esc(n)}">`).join('');
 }
 
+// 一覧に出す期間。null＝最新の月（印刷の「最新の月」と同じ。データが増えれば一緒に動く）。
+// ほかは 'YYYY-MM'（締めの期間）・'custom'（期間指定）・'all'（すべて）。ページを開いている間だけ覚える
+let listPeriodSel = null;
+
+// 期間の選択肢を作り直し、いま出す範囲 { from, to }（"YYYY-MM-DD"）を返す。すべてなら null
+function listPeriodRange(data) {
+  const sel = document.getElementById('listPeriod');
+  const keys = new Set();
+  for (const name in data) for (const date in data[name]) {
+    if (/^\d{4}-\d{2}-\d{2}$/.test(date)) keys.add(periodKeyOf(date));
+  }
+  const latestKey = toDateStr(getLatestDataPeriod().start).slice(0, 7);
+  keys.add(latestKey);
+  const sorted = [...keys].sort().reverse();
+  // 選んでいた月がこのモードに無ければ最新の月を出す（選んだことは覚えたまま）
+  let cur = listPeriodSel || latestKey;
+  if (/^\d{4}-\d{2}$/.test(cur) && !keys.has(cur)) cur = latestKey;
+  sel.innerHTML = sorted.map(k => `<option value="${k}">${periodLabelOf(k)}${k === latestKey ? '（最新）' : ''}</option>`).join('')
+    + '<option value="custom">期間指定</option><option value="all">すべて</option>';
+  sel.value = cur;
+  document.getElementById('listCustomRange').classList.toggle('hidden', cur !== 'custom');
+  if (cur === 'all') return null;
+  if (cur === 'custom') {
+    return { from: document.getElementById('listFrom').value || '0000-00-00', to: document.getElementById('listTo').value || '9999-99-99' };
+  }
+  const p = periodOfKey(cur);
+  return { from: toDateStr(p.start), to: toDateStr(p.end) };
+}
+
 function displayTimeCards() {
   const filter = document.getElementById('searchName').value.trim().toLowerCase();
   const data = loadData();
+  const range = listPeriodRange(data);
   const resultDiv = document.getElementById('result');
   resultDiv.innerHTML = '';
 
@@ -899,6 +929,7 @@ function displayTimeCards() {
 
     Object.keys(data[name]).sort().forEach(date => {
       if (!Array.isArray(data[name][date])) return;
+      if (range && (date < range.from || date > range.to)) return;
       data[name][date].forEach((card, index) => {
         if (!card || !card.checkIn) return;
         hasRecords = true;
@@ -934,7 +965,9 @@ function displayTimeCards() {
   });
 
   if (!hasRecords) {
-    resultDiv.innerHTML = '<div class="no-data">まだ記録がありません</div>';
+    resultDiv.innerHTML = Object.keys(data).length
+      ? '<div class="no-data">この期間の記録はありません</div>'
+      : '<div class="no-data">まだ記録がありません</div>';
   }
   updateBulkBar();
 }
@@ -2912,6 +2945,20 @@ document.addEventListener('DOMContentLoaded', () => {
     document.querySelectorAll('.rec-check:checked').forEach(cb => { cb.checked = false; });
     updateBulkBar();
   });
+
+  // 一覧の期間。期間指定に切り替えたら、それまで出していた月を初めの値にする
+  document.getElementById('listPeriod').addEventListener('change', function () {
+    if (this.value === 'custom' && !document.getElementById('listFrom').value && !document.getElementById('listTo').value) {
+      const cur = listPeriodSel && /^\d{4}-\d{2}$/.test(listPeriodSel) ? listPeriodSel : toDateStr(getLatestDataPeriod().start).slice(0, 7);
+      const p = periodOfKey(cur);
+      document.getElementById('listFrom').value = toDateStr(p.start);
+      document.getElementById('listTo').value = toDateStr(p.end);
+    }
+    listPeriodSel = this.value;
+    displayTimeCards();
+  });
+  document.getElementById('listFrom').addEventListener('change', displayTimeCards);
+  document.getElementById('listTo').addEventListener('change', displayTimeCards);
 
   // 検索
   document.getElementById('searchName').addEventListener('input', displayTimeCards);
