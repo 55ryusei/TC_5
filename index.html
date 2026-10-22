@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>勤怠管理（経理）5.0.0</title>
-  <link rel="stylesheet" href="styles.css?v=5.4.0">
+  <link rel="stylesheet" href="styles.css?v=5.5.0">
 </head>
 <body>
 
@@ -144,6 +144,23 @@
         </div><!-- /cloudBody -->
       </section>
 
+      <!-- アプリ（はくつるポータル）へ自動送信 -->
+      <section class="card" id="appSendCard">
+        <h2 class="card-title card-title-toggle" id="appSendToggle">📱 アプリへ送る <span class="collapse-arrow" id="appSendArrow">▸ ひらく</span></h2>
+        <div id="appSendBody" class="hidden">
+          <p class="hint">勤怠を保存するたびに、確定した期間をアプリへ自動で送ります。鍵は園から受け取ったものを入れてください。</p>
+          <div class="form-group">
+            <label for="appKeyInput">鍵</label>
+            <input type="password" id="appKeyInput" autocomplete="off">
+          </div>
+          <div class="btn-stack">
+            <button class="btn btn-primary btn-block" id="appKeySaveBtn">保存</button>
+            <button class="btn btn-success btn-block" id="appSendNowBtn">今すぐ送る</button>
+          </div>
+          <p class="hint" id="appSendStatus"></p>
+        </div>
+      </section>
+
     </div>
 
     <!-- ============ 右カラム ============ -->
@@ -199,6 +216,6 @@
   <div class="footer"><span>©</span> 2026 SwiftRaptor</div>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.17.0/xlsx.full.min.js"></script>
-  <script src="script.js?v=5.4.0"></script>
+  <script src="script.js?v=5.5.0"></script>
 </body>
 </html>

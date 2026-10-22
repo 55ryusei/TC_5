@@ -212,6 +212,138 @@ function loadData() { return loadDataFor(getMode()); }
 function saveData(data) {
   localStorage.setItem(modeCfg().storageKey, JSON.stringify(data));
   scheduleFolderSave();          // フォルダ連携中なら、そちらにも自動で保存する
+  scheduleAppSend();             // アプリ（はくつるポータル）へも自動で送る
+}
+
+/* ---- アプリ（はくつるポータル）への自動送信 ----
+ * 保存のたびに、変わった締め期間だけをアプリへ送る。失敗しても TC5 の動作は変えない。
+ * 鍵は localStorage の appHrKey（バックアップ・設定ファイルには入れない）。 */
+const APP_URL = 'https://hakutsuru-portal.pages.dev';
+const APP_KEY_KEY = 'appHrKey';
+const APP_STATUS_KEY = 'appHrStatus';
+const APP_MAX_PERIODS = 24;
+const appSentKey = mode => 'appHrSent_' + mode;
+
+// 名前・日付の順をそろえて、短いハッシュ（FNV-1a）にする
+function appHashOf(periodObj) {
+  const names = Object.keys(periodObj || {}).sort();
+  const canon = names.map(n => [n, Object.keys(periodObj[n]).sort().map(d => [d, periodObj[n][d]])]);
+  const s = JSON.stringify(canon);
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+  return h.toString(16) + ':' + s.length;
+}
+
+// 1モード分の勤怠を締め期間ごとにまとめる（送る項目だけ。空の日は除く）
+function appGroupByPeriod(data) {
+  const out = {};
+  for (const name in (data || {})) {
+    const days = data[name] || {};
+    for (const date in days) {
+      const recs = days[date];
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Array.isArray(recs) || !recs.length) continue;
+      const key = periodKeyOf(date);
+      const p = out[key] = out[key] || {};
+      (p[name] = p[name] || {})[date] = recs.filter(Boolean).map(r => ({
+        checkIn: String(r.checkIn || ''), checkOut: String(r.checkOut || ''), isPaidLeave: !!r.isPaidLeave
+      }));
+    }
+  }
+  return out;
+}
+
+// 送る内容を決める。sent = {期間: 前回送ったハッシュ}。
+// 戻り値 { periods: {期間: 中身 or {}}, hashes: {期間: ハッシュ or ''(消した)} }
+function appPlanSend(data, sent, max) {
+  const grouped = appGroupByPeriod(data);
+  sent = sent || {};
+  const all = [...new Set([...Object.keys(grouped), ...Object.keys(sent)])].sort().reverse().slice(0, max || APP_MAX_PERIODS);
+  const periods = {}, hashes = {};
+  for (const key of all) {
+    if (grouped[key]) {
+      const h = appHashOf(grouped[key]);
+      if (sent[key] !== h) { periods[key] = grouped[key]; hashes[key] = h; }
+    } else {
+      periods[key] = {}; hashes[key] = '';      // 前に送った期間が空になった → アプリ側も空にする
+    }
+  }
+  return { periods, hashes };
+}
+
+function appPayload(mode, periods) {
+  return { format: 'tc5-app-upload', version: 1, sentAt: new Date().toISOString(), mode, periods };
+}
+
+function appSetStatus(text, ok) {
+  try { localStorage.setItem(APP_STATUS_KEY, JSON.stringify({ text, ok: !!ok })); } catch {}
+  const el = document.getElementById('appSendStatus');
+  if (el) el.textContent = text;
+}
+
+function appLoadSent(mode) {
+  try {
+    const o = JSON.parse(localStorage.getItem(appSentKey(mode)) || '{}');
+    return (o && typeof o === 'object' && !Array.isArray(o)) ? o : {};
+  } catch { return {}; }
+}
+
+let appSendTimer = null;
+let appSendBusy = false;
+function scheduleAppSend(delay) {
+  try {
+    clearTimeout(appSendTimer);
+    appSendTimer = setTimeout(() => { appSendNow(false); }, delay == null ? 5000 : delay);
+  } catch {}
+}
+
+// force=true：送った記録を消して、新しい24期間をすべて送り直す
+async function appSendNow(force) {
+  clearTimeout(appSendTimer);
+  // 送っている最中なら、少し後にもう一度。ここは try の外で見る
+  // (try の中で return すると、下の finally が「送っている最中」の印を外してしまうため)
+  if (appSendBusy) { scheduleAppSend(3000); return; }
+  appSendBusy = true;
+  try {
+    const key = (localStorage.getItem(APP_KEY_KEY) || '').trim();
+    if (!key) { appSetStatus('アプリへの送信: 鍵が未設定', false); return; }
+    if (force) for (const m of Object.keys(MODES)) localStorage.removeItem(appSentKey(m));
+    const now = new Date();
+    const done = [];
+    for (const mode of Object.keys(MODES)) {
+      const sent = appLoadSent(mode);
+      const plan = appPlanSend(loadDataFor(mode), sent, APP_MAX_PERIODS);
+      const keys = Object.keys(plan.periods);
+      if (!keys.length) continue;
+      const ctrl = new AbortController();
+      const to = setTimeout(() => ctrl.abort(), 20000);
+      let res;
+      try {
+        res = await fetch(APP_URL + '/api/hr/attendance', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-HR-Key': key },
+          body: JSON.stringify(appPayload(mode, plan.periods)),
+          signal: ctrl.signal
+        });
+      } catch (e) {
+        appSetStatus('送信できませんでした（ネットにつながっていません）', false); return;
+      } finally { clearTimeout(to); }
+      if (res.status === 401) { appSetStatus('送信できませんでした（鍵が違います）', false); return; }
+      if (res.status === 503) { appSetStatus('送信できませんでした（アプリ側の準備ができていません）', false); return; }
+      if (!res.ok) { appSetStatus('送信できませんでした（エラー ' + res.status + '）', false); return; }
+      for (const k of keys) { if (plan.hashes[k]) sent[k] = plan.hashes[k]; else delete sent[k]; }
+      localStorage.setItem(appSentKey(mode), JSON.stringify(sent));
+      done.push(MODES[mode].label + ' ' + keys.length + '期間');
+    }
+    if (done.length) {
+      appSetStatus('送信済み ' + (now.getMonth() + 1) + '/' + now.getDate() + ' ' + now.getHours() + ':' + String(now.getMinutes()).padStart(2, '0') + '（' + done.join('、') + '）', true);
+    } else if (force) {
+      appSetStatus('送るデータがありません', true);
+    }
+  } catch (e) {
+    try { appSetStatus('送信できませんでした', false); } catch {}
+  } finally {
+    appSendBusy = false;
+  }
 }
 
 function updateNameUsageOrder(name) {
@@ -865,6 +997,7 @@ async function requestPasswordAndClearData() {
   if (!ok) return;
   localStorage.removeItem(modeCfg().storageKey);
   scheduleFolderSave();
+  scheduleAppSend();
   refreshNameList();
   displayTimeCards();
   showToast('すべてのデータを削除しました', 'success');
@@ -2665,6 +2798,7 @@ function compareWithFolder(local, folder) {
 function applyBothModes(both) {
   localStorage.setItem(MODES.normal.storageKey, JSON.stringify(both.normal || {}));
   localStorage.setItem(MODES.swim.storageKey, JSON.stringify(both.swim || {}));
+  scheduleAppSend();
 }
 
 function applySettingsFromFolder(s) {
@@ -3007,11 +3141,33 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   // 別のタブ（有給管理の「TC5へ直接反映」など）が勤怠を書き換えたら、フォルダにも保存する
   window.addEventListener('storage', e => {
-    if (e.key === MODES.normal.storageKey || e.key === MODES.swim.storageKey) scheduleFolderSave();
+    if (e.key === MODES.normal.storageKey || e.key === MODES.swim.storageKey) { scheduleFolderSave(); scheduleAppSend(); }
   });
+
+  // アプリへ送るカード（折りたたみ・鍵の保存・今すぐ送る）
+  const setAppCollapsed = collapsed => {
+    document.getElementById('appSendBody').classList.toggle('hidden', collapsed);
+    document.getElementById('appSendArrow').textContent = collapsed ? '▸ ひらく' : '▾';
+  };
+  document.getElementById('appSendToggle').addEventListener('click', () =>
+    setAppCollapsed(!document.getElementById('appSendBody').classList.contains('hidden')));
+  document.getElementById('appKeySaveBtn').addEventListener('click', () => {
+    const v = document.getElementById('appKeyInput').value.trim();
+    if (!v) { showToast('鍵を入力してください', 'error'); return; }
+    localStorage.setItem(APP_KEY_KEY, v);
+    document.getElementById('appKeyInput').value = '';
+    appSetStatus('鍵を保存しました。送信中…', true);
+    appSendNow(true);
+  });
+  document.getElementById('appSendNowBtn').addEventListener('click', () => appSendNow(true));
+  try {
+    const st = JSON.parse(localStorage.getItem(APP_STATUS_KEY) || 'null');
+    document.getElementById('appSendStatus').textContent = (localStorage.getItem(APP_KEY_KEY) ? (st && st.text) : '') || (localStorage.getItem(APP_KEY_KEY) ? '' : '鍵が未設定');
+  } catch {}
 
   // 初期表示
   setMode(getMode());
   if (cloudToken) showCloudMain();
   restoreFolder();
+  scheduleAppSend(8000);          // 起動時：未送信の変更があれば送る
 });
